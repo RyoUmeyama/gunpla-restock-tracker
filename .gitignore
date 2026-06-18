@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+.DS_Store
+*.log
+# 在庫状態（GitHub Actions cache で永続化するためコミット不要）
+stock_state.json
+# 検証用一時ファイル
+*_raw.html
+gdb_*.html
+yodo_*.html

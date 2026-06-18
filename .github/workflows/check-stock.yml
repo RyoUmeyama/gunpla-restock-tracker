@@ -1,0 +1,51 @@
+name: Check Gunpla Restock
+
+on:
+  schedule:
+    # 10分ごと（再販は突発的。Q1入手再現性の検証用）
+    - cron: '*/10 * * * *'
+  workflow_dispatch: # 手動実行も可
+
+concurrency:
+  group: gunpla-restock
+  cancel-in-progress: false
+
+jobs:
+  check-stock:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore stock state
+        uses: actions/cache/restore@v4
+        with:
+          path: stock_state.json
+          key: gunpla-stock-state-${{ github.run_id }}
+          restore-keys: |
+            gunpla-stock-state-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run stock checker
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+        run: python check_stock.py
+
+      - name: Save stock state
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: stock_state.json
+          key: gunpla-stock-state-${{ github.run_id }}
