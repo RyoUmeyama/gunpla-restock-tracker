@@ -1,47 +1,51 @@
 #!/usr/bin/env python3
 """
-監視設定 — ガンプラ再販在庫トラッカー（小額モデル検証 Q1 用）
+監視設定 — 転売検証用 在庫トラッカー（小額モデル検証 Q1 用）
 
-目的: docs/07_minimal_validation.md の Q1「入手再現性」を実測するための入手監視。
-      HG 1/144 ナイチンゲール（および追加で監視したい品）が、正規店で
-      定価以下・在庫ありになった瞬間を検知して即通知し、争奪戦に参加できる状態を作る。
+目的: docs/07_minimal_validation.md / docs/08_broad_screening.md の Q1「入手再現性」を
+      実測するための入手監視。狙いの商品が正規店で定価・在庫ありになった瞬間を検知して即通知し、
+      争奪戦に参加できる状態を作る。
 
-データ源の選定理由（事前検証で確定）:
-  - ヨドバシ.com 直接監視 → Bot対策で自動取得不可（接続/WebFetchともに失敗）
-  - GunplaDatabase（複数店舗集約サイト）→ 取得可能で、店舗別の在庫状態が
-    `shop_status_container ... soldout` のCSSクラス有無で判定できる。
-  → GunplaDatabase の商品個別ページを監視し、soldout でない店舗が現れたら在庫復活と判定。
-
-在庫判定ロジック:
-  ページ内の `shop_status_container` ブロックごとに class に `soldout` を含むか判定。
-  soldout を含まない（=在庫あり/予約受付）店舗が1つでもあれば「在庫あり」。
-  前回「在庫なし」→今回「在庫あり」に変化したら通知。
+複数サイト・複数判定方式に対応:
+  各監視品(WATCH_ITEMS)は "method" で在庫判定方式を指定する。
+    - "gdb_soldout": GunplaDatabase。shop_status_container ブロックの soldout/「売切」で判定（ガンプラ用）
+    - "toei_stock_status": 東映アニメ公式。埋め込みJSONの stock_status の値で判定（OP-16用）
+                          stock_status が "0" 以外なら在庫あり。
+  新サイトを足す場合は check_stock.py に判定関数を追加し、method を増やす。
 """
 
-# 監視対象（GunplaDatabaseの商品個別ページ）。複数登録可。
-# no= は GunplaDatabase の商品ID。name は通知に出す表示名。
+# 監視対象。各品に method（判定方式）・url・表示名・定価を持たせる。
 WATCH_ITEMS = [
     {
-        "no": "2294",
         "name": "HG 1/144 ナイチンゲール",
-        "retail_price": 7700,
+        "method": "gdb_soldout",
         "url": "https://gunpla-database.doc-sin.life/?no=2294",
+        "retail_price": 7700,
+        "key": "gunpla_nightingale",
     },
-    # 追加の監視品があればここに足す（同条件: 非酒類・非TCG・正規新品・未開封のまま売れる）
+    {
+        # 網羅スクリーニング(docs/08)の本命。唯一 入手容易さ=medium。
+        # 東映アニメ公式の正規・定価¥5,280ルートを監視。stock_status で在庫判定。
+        "name": "ワンピカード OP-16 決戦の刻 BOX",
+        "method": "toei_stock_status",
+        "url": "https://store.toei-anim.co.jp/shop/g/gONP03841O1/",
+        "retail_price": 5280,
+        "key": "op16_kessen",
+    },
+    # 追加の監視品はここに足す（方針順守: 非酒類・正規新品・未開封のまま売れる）
 ]
 
-# GunplaDatabase 商品ページURLの組み立て用
-GDB_ITEM_URL = "https://gunpla-database.doc-sin.life/?no={no}"
+# --- gdb_soldout 方式（GunplaDatabase）の設定 ---
+GDB_SOLDOUT_MARKER = "soldout"
+GDB_SHOP_BLOCK_CLASS = "shop_status_container"
 
-# 在庫切れを示すCSSクラスのマーカー。
-# shop_status_container ブロックの属性にこの語があれば、その店舗は売り切れ。
-SOLDOUT_MARKER = "soldout"
+# --- toei_stock_status 方式（東映アニメ公式）の設定 ---
+# 商品ページ埋め込みJSONの stock_status を読む。"0" は在庫なし、それ以外は在庫あり。
+TOEI_ENCODING = "shift_jis"
+TOEI_INSTOCK_MEANS_NOT = "0"  # stock_status がこの値なら在庫なし
 
-# 店舗ステータスブロックを切り出す正規表現の起点クラス
-SHOP_BLOCK_CLASS = "shop_status_container"
-
-# このサイトの文字コード
-SITE_ENCODING = "utf-8"
+# 既定の文字コード（明示しないサイト用）
+DEFAULT_ENCODING = "utf-8"
 
 # HTTP設定
 USER_AGENT = (
@@ -51,13 +55,12 @@ USER_AGENT = (
 REQUEST_TIMEOUT = 20
 REQUEST_INTERVAL = 1.5  # 商品ごとのリクエスト間隔（サイト負荷配慮）
 
-# 前回在庫状態の保存ファイル（在庫なし→在庫ありの変化時のみ通知するため）
+# 前回在庫状態の保存ファイル
 STATE_FILE = "stock_state.json"
 
-# 通知本文に出す、検証の心得（争奪戦は数分で完売）
-# ※Amazon等は転売価格の場合あり。通知後に「定価で買えるか」を必ず人間が確認する前提。
+# 通知本文の心得（争奪戦は数分で完売。価格は要確認）
 NOTE = (
     "再販/在庫を検知。数分で完売の可能性大。"
-    "⚠️必ず価格を確認（定価7,700円か。Amazon等は転売価格の場合あり）。"
-    "定価なら即購入→実勢12,000〜13,000円で売却検証。"
+    "⚠️必ず価格を確認（定価で買えるか。転売価格の場合あり）。"
+    "定価なら即購入→即売りで売却検証（寝かせ厳禁）。"
 )

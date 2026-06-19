@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-ガンプラ再販在庫チェッカー（小額モデル検証 Q1 用）
+転売検証 在庫チェッカー（小額モデル検証 Q1 用）
 
 毎回:
-  1. WATCH_ITEMS の各商品を GunplaDatabase の個別ページで取得
-  2. shop_status_container ブロックの soldout クラス有無で「在庫あり店舗の有無」を判定
-  3. 「前回=在庫なし → 今回=在庫あり」に変化した商品だけ通知（メール＋Discord）
+  1. WATCH_ITEMS の各商品を、item["method"] に応じた方式で取得・在庫判定
+     - gdb_soldout: GunplaDatabase（ガンプラ。soldout/「売切」で判定）
+     - toei_stock_status: 東映アニメ公式（OP-16等。埋め込みJSONの stock_status で判定）
+  2. 「前回=在庫なし → 今回=在庫あり」に変化した商品だけ通知（メール＋Discord）
 
-在庫判定: soldout でない店舗が1つでもあれば在庫あり。
+新サイトを足す場合は _check_<method> 関数を追加し、config の method を増やす。
 """
 
 import os
@@ -23,39 +24,46 @@ from email_utils import send_email_with_retry
 from webhook_utils import send_webhook
 
 
-def fetch(url):
+def fetch(url, encoding):
     headers = {"User-Agent": config.USER_AGENT}
     resp = requests.get(url, headers=headers, timeout=config.REQUEST_TIMEOUT)
     resp.raise_for_status()
-    return resp.content.decode(config.SITE_ENCODING, errors="replace")
+    return resp.content.decode(encoding, errors="replace")
 
 
 def check_item(item):
     """
-    1商品の在庫を判定。
-    返り値: (in_stock: bool, ok: bool, in_stock_shops: list)
-      ok=False は取得失敗（判定不能）。
+    1商品の在庫を判定。item["method"] で判定方式を振り分ける。
+    返り値: (in_stock: bool, ok: bool, detail: str)
+      ok=False は取得失敗（判定不能）。detail は通知用の補足（在庫店名や価格など）。
     """
-    url = config.GDB_ITEM_URL.format(no=item["no"])
+    method = item.get("method")
+    if method == "gdb_soldout":
+        return _check_gdb_soldout(item)
+    if method == "toei_stock_status":
+        return _check_toei_stock_status(item)
+    print(f"  ⚠ 未知のmethod {method}（{item['name']}）")
+    return False, False, ""
+
+
+def _check_gdb_soldout(item):
+    """GunplaDatabase: shop_status_container ブロックの soldout/「売切」で判定。"""
     try:
-        html = fetch(url)
+        html = fetch(item["url"], config.DEFAULT_ENCODING)
     except Exception as e:
         print(f"  ⚠ 取得失敗 {item['name']}: {e}")
-        return False, False, []
+        return False, False, ""
 
-    # shop_status_container ブロックを、各出現位置から次の出現位置までで切り出す。
-    # （ブロック内部のCSSクラスに soldout が付くため、属性だけでなくブロック全体を見る）
-    positions = [m.start() for m in re.finditer(config.SHOP_BLOCK_CLASS, html)]
+    positions = [m.start() for m in re.finditer(config.GDB_SHOP_BLOCK_CLASS, html)]
     if not positions:
         print(f"  ⚠ 店舗ブロック検出できず {item['name']}（ページ構造変化の可能性）")
-        return False, False, []
+        return False, False, ""
     positions.append(len(html))
 
     in_stock_shops = []
     for i in range(len(positions) - 1):
         seg = html[positions[i] : positions[i + 1]]
-        # 在庫切れ判定: soldout クラス、または「売切」テキストがあれば売り切れ。
-        is_sold = (config.SOLDOUT_MARKER in seg) or ("売切" in seg) or ("売り切れ" in seg)
+        is_sold = (config.GDB_SOLDOUT_MARKER in seg) or ("売切" in seg) or ("売り切れ" in seg)
         m = re.search(
             r"(amazon|yodobashi|あみあみ|amiami|surugaya|駿河屋|rakuten|楽天|dmm|"
             r"プレミアムバンダイ|p-bandai|ホビーサーチ|hobbysearch)",
@@ -67,7 +75,27 @@ def check_item(item):
             in_stock_shops.append(shop)
 
     in_stock = len(in_stock_shops) > 0
-    return in_stock, True, in_stock_shops
+    return in_stock, True, ", ".join(in_stock_shops)
+
+
+def _check_toei_stock_status(item):
+    """東映アニメ公式: 埋め込みJSONの stock_status の値で判定。
+    stock_status が TOEI_INSTOCK_MEANS_NOT("0") 以外なら在庫あり。"""
+    try:
+        html = fetch(item["url"], config.TOEI_ENCODING)
+    except Exception as e:
+        print(f"  ⚠ 取得失敗 {item['name']}: {e}")
+        return False, False, ""
+
+    # &quot; エスケープされた stock_status を読む
+    m = re.search(r"stock_status(?:&quot;|\")\s*:\s*(?:&quot;|\")?([0-9]+)", html)
+    if not m:
+        print(f"  ⚠ stock_status 検出できず {item['name']}（ページ構造変化の可能性）")
+        return False, False, ""
+
+    status = m.group(1)
+    in_stock = status != config.TOEI_INSTOCK_MEANS_NOT
+    return in_stock, True, f"東映公式 stock_status={status}"
 
 
 def load_state():
@@ -86,15 +114,15 @@ def save_state(state):
 
 
 def main():
-    print("=== ガンプラ再販在庫チェック開始 ===")
+    print("=== 転売検証 在庫チェック開始 ===")
     prev = load_state()
     new_state = {}
     restocked = []
 
     for item in config.WATCH_ITEMS:
-        in_stock, ok, shops = check_item(item)
+        in_stock, ok, detail = check_item(item)
         time.sleep(config.REQUEST_INTERVAL)
-        key = item["no"]
+        key = item["key"]
         if not ok:
             new_state[key] = prev.get(key, False)  # 取得失敗は前回維持（誤通知防止）
             print(f"  {item['name']}: 判定不能（前回状態を維持）")
@@ -105,10 +133,10 @@ def main():
         status = "在庫あり🟢" if in_stock else "在庫なし🔴"
         change = ""
         if in_stock and not was:
-            change = f"  ← 復活！（{', '.join(shops)}）"
-            restocked.append((item, shops))
-        shop_note = f" [{', '.join(shops)}]" if shops else ""
-        print(f"  {item['name']}: {status}{shop_note}{change}")
+            change = f"  ← 復活！（{detail}）"
+            restocked.append((item, detail))
+        detail_note = f" [{detail}]" if detail else ""
+        print(f"  {item['name']}: {status}{detail_note}{change}")
 
     save_state(new_state)
 
@@ -121,15 +149,15 @@ def main():
 
 
 def build_messages(restocked):
-    """restocked: [(item, shops)] → (subject, text, html, webhook_title, webhook_lines)"""
+    """restocked: [(item, detail)] → (subject, text, html, webhook_title, webhook_lines)"""
     n = len(restocked)
-    subject = f"🤖【再販検知】ガンプラ {n}件 在庫あり！（{config.NOTE[:20]}…）"
+    subject = f"🤖【在庫検知】転売検証 {n}件 在庫あり！（要・定価確認）"
 
-    text_lines = ["ガンプラ再販を検知しました！", config.NOTE, ""]
+    text_lines = ["狙いの商品の在庫を検知しました！", config.NOTE, ""]
     web_lines = [config.NOTE, ""]
     html_rows = []
-    for item, shops in restocked:
-        line = f"・{item['name']}（定価{item['retail_price']:,}円）在庫店: {', '.join(shops)}"
+    for item, detail in restocked:
+        line = f"・{item['name']}（定価{item['retail_price']:,}円）{detail}"
         text_lines.append(line)
         text_lines.append(f"  {item['url']}")
         text_lines.append("")
@@ -137,15 +165,15 @@ def build_messages(restocked):
         web_lines.append(item["url"])
         html_rows.append(
             f'<li style="margin-bottom:10px;"><strong>{item["name"]}</strong>'
-            f'（定価{item["retail_price"]:,}円）在庫店: {", ".join(shops)}<br>'
+            f'（定価{item["retail_price"]:,}円）{detail}<br>'
             f'<a href="{item["url"]}">{item["url"]}</a></li>'
         )
     text = "\n".join(text_lines)
     html = (
         '<html><body style="font-family:sans-serif;">'
-        '<h2 style="color:#c00;">🤖 ガンプラ再販 在庫検知！</h2>'
+        '<h2 style="color:#c00;">🤖 転売検証 在庫検知！</h2>'
         f"<p>{config.NOTE}</p><ul>{''.join(html_rows)}</ul>"
-        '<p style="color:#888;font-size:12px;">ガンプラ再販監視Botより自動送信</p>'
+        '<p style="color:#888;font-size:12px;">転売検証 在庫トラッカーより自動送信</p>'
         "</body></html>"
     )
     return subject, text, html, subject, web_lines
