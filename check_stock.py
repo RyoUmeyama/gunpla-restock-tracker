@@ -181,6 +181,43 @@ def _check_cart_button(item):
     return in_stock, True, f"cart_button(cart={has_cart},sold={sold})"
 
 
+def fetch_pokecard_new_products():
+    """ポケカ公式の商品APIから現在の商品リストを取得する。
+    resultAPI.php の4カテゴリ(expansion/construction/others/peripheral)を叩き、
+    各商品を (productTitle, releaseDate) のキーで返す。
+    返り値: (products: dict[key->info], ok: bool)。ok=False は全カテゴリ取得失敗。"""
+    base = "https://www.pokemon-card.com/products/resultAPI.php"
+    headers = {"User-Agent": config.USER_AGENT}
+    products = {}
+    any_ok = False
+    for ptype in config.POKECARD_PRODUCT_TYPES:
+        try:
+            resp = requests.get(
+                base, params={"productType": ptype, "page": "1"},
+                headers=headers, timeout=config.REQUEST_TIMEOUT,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            any_ok = True
+            for p in data.get("products", []):
+                title = (p.get("productTitle") or "").strip()
+                rdate = (p.get("releaseDate") or "").strip()
+                if not title:
+                    continue
+                key = f"{title}|{rdate}"
+                products[key] = {
+                    "title": title,
+                    "releaseDate": rdate,
+                    "price": (p.get("priceTxt") or "").strip(),
+                    "link": p.get("link_detailPage") or "",
+                    "type": ptype,
+                }
+            time.sleep(config.REQUEST_INTERVAL)
+        except Exception as e:
+            print(f"  ⚠ ポケカAPI取得失敗({ptype}): {e}")
+    return products, any_ok
+
+
 def compute_page_signature(item):
     """page_update方式: ページから再販関連の本文だけを抽出・正規化してハッシュを返す。
     広告・カウンタ等のノイズを避けるため、再販キーワードと日付を含む行に絞る。
@@ -197,15 +234,33 @@ def compute_page_signature(item):
     text = re.sub(r"<[^>]+>", "\n", text)
     text = re.sub(r"&[a-z]+;", " ", text)
 
-    # 再販関連 or 日付を含む行だけを抽出（ノイズ除去）
-    date_re = re.compile(r"\d{1,2}月\s*\d{1,2}日")
+    # 再販関連 or 日付を含む行だけを抽出（ノイズ除去）。
+    # date_re は年付き・スラッシュ・ドット型まで拡張（pokecazilla等のスラッシュ型対策）。
+    date_re = re.compile(
+        r"\d{1,2}月\s*\d{1,2}日|202\d/\d{1,2}/\d{1,2}|202\d\.\d{1,2}\.\d{1,2}"
+    )
+    # 揮発行: 「○月○日更新」「○時○分時点」「現在、」等を含む行は
+    # 再販ゼロでも毎回変わる＝誤検知の元なので、行ごと除外する。
+    volatile_line_re = re.compile(r"更新】|更新\)|時点|現在[、,]|最終更新|本日|今日")
+    # 揮発トークン: 日付・時刻の数値そのものをハッシュから除去（行は残しつつ数値だけ消す）
+    volatile_token_re = re.compile(
+        r"【?\d{4}年\d{1,2}月\d{1,2}日.*?更新】?"
+        r"|\d{1,2}時\d{1,2}分.*?時点"
+        r"|\d{1,2}:\d{2}\s*時点"
+    )
+
     picked = []
     for line in text.splitlines():
         s = line.strip()
         if not s:
             continue
+        if volatile_line_re.search(s):
+            continue  # 揮発行はまるごと除外
         if any(kw in s for kw in config.PAGE_UPDATE_KEYWORDS) or date_re.search(s):
-            picked.append(re.sub(r"\s+", " ", s))
+            s = volatile_token_re.sub("", s)  # 行内の揮発トークンも除去
+            s = re.sub(r"\s+", " ", s).strip()
+            if s:
+                picked.append(s)
 
     # 正規化（重複除去・ソート）してハッシュ化。順序揺れに強くする。
     normalized = "\n".join(sorted(set(picked)))
@@ -236,6 +291,32 @@ def run_once():
 
     for item in config.WATCH_ITEMS:
         key = item["key"]
+
+        if item.get("method") == "pokecard_official_list":
+            # ポケカ公式API: (title,releaseDate)セット差分で新商品を検知（初回は基準記録）
+            products, ok = fetch_pokecard_new_products()
+            if not ok:
+                new_state[key] = prev.get(key, [])
+                print(f"  {item['name']}: 判定不能（前回状態を維持）")
+                continue
+            cur_keys = sorted(products.keys())
+            new_state[key] = cur_keys
+            prev_keys = prev.get(key, None)
+            if prev_keys is None:
+                print(f"  {item['name']}: 初回・{len(cur_keys)}商品を記録（通知なし）")
+            else:
+                fresh = [k for k in cur_keys if k not in set(prev_keys)]
+                if fresh:
+                    names = "、".join(products[k]["title"] for k in fresh[:5])
+                    print(f"  {item['name']}: 新商品{len(fresh)}件検知🔔 ← 通知（{names}）")
+                    detail_lines = []
+                    for k in fresh:
+                        p = products[k]
+                        detail_lines.append(f"{p['title']}（{p['releaseDate']} {p['price']}）{p['link']}")
+                    alerts.append((item, "ポケカ新商品: " + " / ".join(detail_lines[:5])))
+                else:
+                    print(f"  {item['name']}: 新商品なし（{len(cur_keys)}商品）")
+            continue
 
         if item.get("method") == "page_update":
             # 告知ページ: 前回ハッシュと変化したら通知（初回は基準値を保存のみ）

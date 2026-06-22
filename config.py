@@ -125,6 +125,38 @@ WATCH_ITEMS = [
         "retail_price": 0,
         "key": "gunpla_news",
     },
+    # ===== Phase1（2026-06-22 動的追従 docs/11）=====
+    # --- ポケカ別格: 公式API 新弾検知（新商品が出たら通知＋将来は監視候補化）---
+    {
+        "name": "ポケカ公式 新商品検知（全カテゴリ）",
+        "method": "pokecard_official_list",
+        "url": "https://www.pokemon-card.com/products/resultAPI.php",
+        "retail_price": 0,
+        "key": "pokecard_official",
+    },
+    # --- ポケセン実店舗 販売方法ページ（都内店頭チャネル。matoca抽選/整理券の事前確定）---
+    {
+        "name": "ポケセン トウキョーDX 店頭ニュース",
+        "method": "page_update",
+        "url": "https://shop.pokemon.co.jp/ja/shop/pokemoncenter-tokyodx/news/",
+        "retail_price": 0,
+        "key": "pokecenter_tokyodx_news",
+    },
+    {
+        "name": "ポケセン メガトウキョー 店頭ニュース",
+        "method": "page_update",
+        "url": "https://shop.pokemon.co.jp/ja/shop/pokemoncenter-megatokyo/news/",
+        "retail_price": 0,
+        "key": "pokecenter_megatokyo_news",
+    },
+    # --- ポケカ コラボ・プロモ・グッズ 公式info一覧（ポケカ全方位）---
+    {
+        "name": "ポケカ公式 info一覧（コラボ/限定/プロモ）",
+        "method": "page_update",
+        "url": "https://www.pokemon-card.com/info/",
+        "retail_price": 0,
+        "key": "pokecard_info",
+    },
     # 追加の監視品はここに足す（方針順守: 非酒類・正規新品・未開封のまま売れる）
 ]
 
@@ -141,7 +173,13 @@ TOEI_INSTOCK_MEANS_NOT = "0"  # stock_status がこの値なら在庫なし
 # ページから再販関連の本文だけを抽出し、正規化してハッシュ化。前回ハッシュと変われば
 # 「告知が更新された」と判定して通知する。広告等のノイズを除くため抽出範囲を絞る。
 # 「受付中/予約/抽選/先着/再販/入荷」と日付の周辺テキストを抽出対象にする。
-PAGE_UPDATE_KEYWORDS = ["受付中", "予約", "抽選", "先着", "再販", "入荷"]
+# ※揮発日付（○月○日更新・○時○分時点）は compute_page_signature で除外して誤検知を防ぐ。
+PAGE_UPDATE_KEYWORDS = ["受付中", "予約", "抽選", "先着", "再販", "入荷", "整理券", "販売方法", "コラボ", "限定", "プロモ", "受注"]
+
+# --- pokecard_official_list 方式（ポケカ公式API 新弾検知）の設定 ---
+# resultAPI.php の4カテゴリ。新弾は (productTitle, releaseDate) のセット差分で検知する。
+# productType の正しい値は下記4つのみ（deck/other等は無効値で全件返すサイレント故障の罠）。
+POKECARD_PRODUCT_TYPES = ["expansion", "construction", "others", "peripheral"]
 
 # 既定の文字コード（明示しないサイト用）
 DEFAULT_ENCODING = "utf-8"
