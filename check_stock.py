@@ -588,7 +588,11 @@ def notify(restocked):
 
 def _notify_email(subject, text, html):
     server = os.environ.get("SMTP_SERVER")
-    port = int(os.environ.get("SMTP_PORT", "587"))
+    # SMTP_PORTが非数値（GitHub Actionsのマスク '***' 等）でも落ちないようフォールバック
+    try:
+        port = int(os.environ.get("SMTP_PORT", "587"))
+    except (ValueError, TypeError):
+        port = 587
     user = os.environ.get("SMTP_USERNAME")
     pw = os.environ.get("SMTP_PASSWORD")
     to = os.environ.get("RECIPIENT_EMAIL")
