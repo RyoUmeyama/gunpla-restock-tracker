@@ -181,6 +181,52 @@ def _check_cart_button(item):
     return in_stock, True, f"cart_button(cart={has_cart},sold={sold})"
 
 
+def fetch_altema_box_prices():
+    """altemaのポケカBOX買取価格表から {BOX名: 買取価格(int)} を取得する。
+    相場選別(passes_profit)の保守的な現金化下限指標として使う。
+    返り値: (prices: dict[str->int], ok: bool)。"""
+    headers = {"User-Agent": config.USER_AGENT}
+    try:
+        resp = requests.get(config.ALTEMA_BOX_URL, headers=headers, timeout=config.REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        html = resp.content.decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"  ⚠ altema相場取得失敗: {e}")
+        return {}, False
+
+    prices = {}
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S):
+        cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.S)
+        cells = [re.sub(r"<[^>]+>", "", c).strip() for c in cells]
+        if not cells:
+            continue
+        name = cells[0]
+        txt = " ".join(cells)
+        pm = re.search(r"([0-9,]+)\s*円", txt)
+        if name and pm:
+            try:
+                prices[name] = int(pm.group(1).replace(",", ""))
+            except ValueError:
+                pass
+    return prices, True
+
+
+def passes_profit(retail, market, is_pokeca):
+    """相場選別: 市場価格と定価から、監視ON/除外を判定する。
+    返り値: 'active'(監視ON) / 'dropped'(除外) / 'unknown'(判定不能=安全側で監視継続)。
+    ポケカは別格で閾値を下げる(定価以上で売れれば監視)。"""
+    if not retail or not market or retail <= 0 or market <= 0:
+        return "unknown"
+    spread = market / retail
+    net = market * (1 - config.FEE_RATE) - retail
+    spread_in = config.POKECA_SPREAD_IN if is_pokeca else config.PROFIT_SPREAD_IN
+    if spread >= spread_in and net > 0:
+        return "active"
+    if spread < config.PROFIT_SPREAD_OUT:
+        return "dropped"
+    return "unknown"  # 中間帯は監視継続（安全側）
+
+
 def discover_from_rss():
     """nyuka-now のRSSフィードから、監視キーワードに合致する商品(入荷/再販)を発見する。
     返り値: (found: dict[link->{title,link}], ok: bool)。ok=False は全フィード取得失敗。
@@ -347,6 +393,47 @@ def run_discovery(prev, new_state, alerts):
         print(f"  RSS発見器: 新規なし（既知{len(discovered)}件）")
 
 
+def run_price_screen(prev, new_state):
+    """Phase3(ログ通知モード): altema相場で監視itemの利益判定をログ表示する。
+    自動除外はまだ行わず、dropped連続回数だけ state に蓄積（将来の自動除外の地ならし）。"""
+    prices, ok = fetch_altema_box_prices()
+    time.sleep(config.REQUEST_INTERVAL)
+    drop_counts = dict(prev.get("drop_counts", {}))
+    if not ok:
+        new_state["drop_counts"] = drop_counts
+        print("  相場選別: 判定不能（altema取得失敗・前回維持）")
+        return
+
+    print("  --- 相場選別（ログのみ・自動除外なし）---")
+    for item in config.WATCH_ITEMS:
+        retail = item.get("retail_price", 0)
+        if not retail:
+            continue
+        name = item["name"]
+        # altema相場辞書から銘柄名で部分一致
+        market = None
+        for k, v in prices.items():
+            core = name.replace("ポケカ ", "").replace(" BOX", "").replace(" 再販集約", "")
+            if core and (core in k or k in core):
+                market = v
+                break
+        if market is None:
+            continue
+        is_pokeca = ("ポケカ" in name) or ("ポケモンカード" in name)
+        verdict = passes_profit(retail, market, is_pokeca)
+        key = item["key"]
+        if verdict == "dropped":
+            drop_counts[key] = drop_counts.get(key, 0) + 1
+        else:
+            drop_counts[key] = 0
+        net = market * (1 - config.FEE_RATE) - retail
+        flag = ""
+        if verdict == "dropped" and drop_counts[key] >= config.DROP_CONFIRM_COUNT:
+            flag = f"  ⚠除外候補(連続{drop_counts[key]}回・自動除外は未有効)"
+        print(f"    {name[:24]}: 定価{retail} 相場{market} 手残り{net:+.0f}円 → {verdict}{flag}")
+    new_state["drop_counts"] = drop_counts
+
+
 def run_once():
     """在庫チェックを1パス実行し、在庫復活/告知更新があれば通知する。状態はファイルで永続化。"""
     prev = load_state()
@@ -355,6 +442,10 @@ def run_once():
 
     # Phase2: RSS発見器で新弾・再販を自動キャッチ（固定リストを動的に補完）
     run_discovery(prev, new_state, alerts)
+
+    # Phase3: 相場選別（ログ通知モード）。価値が落ちた銘柄をログ表示するが自動除外はまだしない。
+    if config.PRICE_SCREEN_ENABLED:
+        run_price_screen(prev, new_state)
 
     for item in config.WATCH_ITEMS:
         key = item["key"]

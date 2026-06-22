@@ -195,6 +195,22 @@ WATCH_KEYWORDS = [
 # 動的監視候補の上限（net利益降順で上位のみ。暴走防止）
 MAX_DISCOVERED_ITEMS = 30
 
+# --- Phase3: 相場選別（価値が落ちた旧銘柄を自動除外）---
+# 相場ソース: altema BOX買取価格表（静的HTML・堅牢。現金化下限の保守指標）。
+# pokeca-chartはBOX相場APIが先方バグで故障のため使わない（docs/11）。
+ALTEMA_BOX_URL = "https://altema.jp/pokemoncard/mikaihubox"
+FEE_RATE = 0.10            # 売却手数料（メルカリ等）
+PROFIT_SPREAD_IN = 1.25    # 市場/定価 がこれ以上で監視ON（手数料・送料控除後も利益）
+PROFIT_SPREAD_OUT = 1.05   # これ未満（定価割れ近傍）で監視から自動除外
+POKECA_SPREAD_IN = 1.0     # ポケカは別格: 定価以上で売れれば監視ON（ほぼ全弾）
+# 相場選別の安全ガード: 取得失敗時は判定不能=監視継続（優良銘柄の取りこぼし防止）。
+# dropped化はヒステリシス（連続観測）で行い、一時的な相場ブレで外さない。
+DROP_CONFIRM_COUNT = 2     # 連続でこの回数 dropped 判定が続いたら実際に除外
+# Phase3は「ログ通知のみ」で開始（自動除外はまだしない）。数日様子を見て誤除外がないことを
+# 確認してから AUTO_DROP_ENABLED を True にして自動除外を有効化する。
+PRICE_SCREEN_ENABLED = True   # 相場選別の判定をログ表示する
+AUTO_DROP_ENABLED = False     # True にすると dropped 銘柄を実際に監視から除外（まだ無効）
+
 # 既定の文字コード（明示しないサイト用）
 DEFAULT_ENCODING = "utf-8"
 
