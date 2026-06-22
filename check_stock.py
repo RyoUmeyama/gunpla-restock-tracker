@@ -181,6 +181,35 @@ def _check_cart_button(item):
     return in_stock, True, f"cart_button(cart={has_cart},sold={sold})"
 
 
+def discover_from_rss():
+    """nyuka-now のRSSフィードから、監視キーワードに合致する商品(入荷/再販)を発見する。
+    返り値: (found: dict[link->{title,link}], ok: bool)。ok=False は全フィード取得失敗。
+    ※規約配慮: 低頻度・キャッシュTTLで運用（FEED_URLSは最小限に絞る）。"""
+    headers = {"User-Agent": config.USER_AGENT}
+    found = {}
+    any_ok = False
+    for feed_url in config.FEED_URLS:
+        try:
+            resp = requests.get(feed_url, headers=headers, timeout=config.REQUEST_TIMEOUT, allow_redirects=True)
+            resp.raise_for_status()
+            xml = resp.content.decode("utf-8", errors="replace")
+            any_ok = True
+            for block in re.findall(r"<item>(.*?)</item>", xml, re.S):
+                tm = re.search(r"<title>(.*?)</title>", block, re.S)
+                lm = re.search(r"<link>(.*?)</link>", block, re.S)
+                if not (tm and lm):
+                    continue
+                title = re.sub(r"<!\[CDATA\[|\]\]>", "", tm.group(1)).strip()
+                link = lm.group(1).strip()
+                # 監視キーワードに合致するものだけ拾う（ポケカ別格＝ポケカ語は広く）
+                if any(kw in title for kw in config.WATCH_KEYWORDS):
+                    found[link] = {"title": title, "link": link}
+            time.sleep(config.REQUEST_INTERVAL)
+        except Exception as e:
+            print(f"  ⚠ RSS取得失敗({feed_url[:40]}): {e}")
+    return found, any_ok
+
+
 def fetch_pokecard_new_products():
     """ポケカ公式の商品APIから現在の商品リストを取得する。
     resultAPI.php の4カテゴリ(expansion/construction/others/peripheral)を叩き、
@@ -283,11 +312,49 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
+def run_discovery(prev, new_state, alerts):
+    """Phase2: RSS発見器。フィードから監視キーワード合致の新規商品を発見し、
+    既知(prev['discovered'])にない新規を通知＋状態に記録する。
+    発見した商品は次サイクル以降 discovered として記録され、重複通知しない。"""
+    found, ok = discover_from_rss()
+    discovered = dict(prev.get("discovered", {}))  # link -> {title,link}
+    if not ok:
+        new_state["discovered"] = discovered  # 取得失敗は前回維持
+        print("  RSS発見器: 判定不能（前回状態を維持）")
+        return
+
+    first_run = "discovered" not in prev
+    fresh = [lk for lk in found if lk not in discovered]
+    # 発見済みに統合（上限を超えたら古いものから落とす）
+    for lk, info in found.items():
+        discovered[lk] = info
+    if len(discovered) > config.MAX_DISCOVERED_ITEMS:
+        # dictは挿入順。古い順に削る
+        for lk in list(discovered.keys())[: len(discovered) - config.MAX_DISCOVERED_ITEMS]:
+            del discovered[lk]
+    new_state["discovered"] = discovered
+
+    if first_run:
+        print(f"  RSS発見器: 初回・{len(found)}件を記録（通知なし）")
+    elif fresh:
+        names = "、".join(found[lk]["title"][:30] for lk in fresh[:5])
+        print(f"  RSS発見器: 新規{len(fresh)}件発見🔔 ← 通知（{names}）")
+        lines = [f"{found[lk]['title']} {found[lk]['link']}" for lk in fresh[:8]]
+        # 発見通知用の疑似item
+        disco_item = {"name": "新弾・再販を発見（RSS）", "url": config.FEED_URLS[0], "retail_price": 0}
+        alerts.append((disco_item, "新規発見: " + " / ".join(lines)))
+    else:
+        print(f"  RSS発見器: 新規なし（既知{len(discovered)}件）")
+
+
 def run_once():
     """在庫チェックを1パス実行し、在庫復活/告知更新があれば通知する。状態はファイルで永続化。"""
     prev = load_state()
     new_state = {}
     alerts = []  # [(item, detail)] 通知すべき変化
+
+    # Phase2: RSS発見器で新弾・再販を自動キャッチ（固定リストを動的に補完）
+    run_discovery(prev, new_state, alerts)
 
     for item in config.WATCH_ITEMS:
         key = item["key"]
