@@ -35,12 +35,95 @@ WATCH_ITEMS = [
     {
         # 【C: 再販告知の監視】OP-16の再販入荷情報まとめ（40社以上集約）。
         # 在庫の「瞬間」ではなく再販告知の「更新」を検知する。間引きに強い保険。
-        # 在庫監視(toei)が見逃しても、告知更新で数時間〜数日前に構えられる。
         "name": "OP-16 再販告知まとめ（anime-matsuri）",
         "method": "page_update",
         "url": "https://anime-matsuri.com/onepiececard-kessennokoku-op16-reservation-lottery/",
         "retail_price": 5280,
         "key": "op16_restock_news",
+    },
+    # ===== 2026-06-22 多数監視に拡張（docs/10_multi_watch_sources.md で実地検証）=====
+    # 設計判断: 個別在庫判定(駿河屋検索/カードラッシュ/コトブキヤ)は実地で不安定=誤検知リスク
+    # と判明したため、確実な個別在庫判定(東映公式・GunplaDatabase)＋集約ページ更新検知
+    # (nyuka-now の page_update)に一本化。誤検知ゼロで在庫変動・再販告知を広く拾う。
+
+    # --- 個別在庫判定（実地検証で安定・確実なものだけ）---
+    {
+        "name": "DBFW MANGA BOOSTER 02 [SB02] BOX（在庫）",
+        "method": "toei_stock_status",
+        "url": "https://store.toei-anim.co.jp/shop/g/gDBS00124O1/",
+        "retail_price": 7920,
+        "key": "dbfw_sb02_stock",
+    },
+    # --- 集約ページ更新検知（page_update。誤検知なし・在庫変動/再販告知を拾う）---
+    {
+        "name": "DBFW CROSS FORCE FB10 再販集約",
+        "method": "page_update",
+        "url": "https://nyuka-now.com/archives/140408",
+        "retail_price": 5280,
+        "key": "dbfw_fb10_news",
+    },
+    {
+        "name": "DBFW MANGA BOOSTER SB01 再販集約",
+        "method": "page_update",
+        "url": "https://nyuka-now.com/archives/151955",
+        "retail_price": 7920,
+        "key": "dbfw_sb01_news",
+    },
+    {
+        "name": "ポケカ テラスタルフェスex 再販集約",
+        "method": "page_update",
+        "url": "https://nyuka-now.com/archives/144710",
+        "retail_price": 5500,
+        "key": "pokeca_terastal_news",
+    },
+    {
+        "name": "ポケカ ホワイトフレア 再販集約",
+        "method": "page_update",
+        "url": "https://nyuka-now.com/archives/145377",
+        "retail_price": 5800,
+        "key": "pokeca_whiteflare_news",
+    },
+    {
+        "name": "ポケカ ブラックボルト 再販集約",
+        "method": "page_update",
+        "url": "https://nyuka-now.com/?s=%E3%83%96%E3%83%A9%E3%83%83%E3%82%AF%E3%83%9C%E3%83%AB%E3%83%88",
+        "retail_price": 5800,
+        "key": "pokeca_blackbolt_news",
+    },
+    {
+        "name": "ワンピTCG 在庫・再販集約（横断）",
+        "method": "page_update",
+        "url": "https://nyuka-now.com/archives/97073",
+        "retail_price": 5280,
+        "key": "onepiece_cross_news",
+    },
+    {
+        "name": "遊戯王 WPP7 再販集約",
+        "method": "page_update",
+        "url": "https://nyuka-now.com/archives/24047",
+        "retail_price": 2970,
+        "key": "yugioh_wpp7_news",
+    },
+    {
+        "name": "遊戯王 RARITY COLLECTION RC04 再販集約",
+        "method": "page_update",
+        "url": "https://nyuka-now.com/archives/134935",
+        "retail_price": 5280,
+        "key": "yugioh_rc04_news",
+    },
+    {
+        "name": "名探偵コナンTCG 再販集約",
+        "method": "page_update",
+        "url": "https://nyuka-now.com/archives/143009",
+        "retail_price": 7392,
+        "key": "conan_tcg_news",
+    },
+    {
+        "name": "ガンプラ 在庫・再販集約（プレバン/人気品横断）",
+        "method": "page_update",
+        "url": "https://nyuka-now.com/archives/6830",
+        "retail_price": 0,
+        "key": "gunpla_news",
     },
     # 追加の監視品はここに足す（方針順守: 非酒類・正規新品・未開封のまま売れる）
 ]

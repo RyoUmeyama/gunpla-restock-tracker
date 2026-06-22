@@ -43,6 +43,12 @@ def check_item(item):
         return _check_gdb_soldout(item)
     if method == "toei_stock_status":
         return _check_toei_stock_status(item)
+    if method == "spec_stock_msg":
+        return _check_toei_spec_stock_msg(item)
+    if method == "soldout_text":
+        return _check_suruga_soldout_text(item)
+    if method == "cart_button":
+        return _check_cart_button(item)
     print(f"  ⚠ 未知のmethod {method}（{item['name']}）")
     return False, False, ""
 
@@ -97,6 +103,82 @@ def _check_toei_stock_status(item):
     status = m.group(1)
     in_stock = status != config.TOEI_INSTOCK_MEANS_NOT
     return in_stock, True, f"東映公式 stock_status={status}"
+
+
+def _check_toei_spec_stock_msg(item):
+    """東映の旧movic系テンプレ（gDBS系）: stock_status JSONが無く spec_stock_msg で判定。
+    × (&#215;)=在庫なし / ◎=在庫あり。補助として soldout.gif の有無も見る。"""
+    try:
+        html = fetch(item["url"], config.TOEI_ENCODING)
+    except Exception as e:
+        print(f"  ⚠ 取得失敗 {item['name']}: {e}")
+        return False, False, ""
+
+    # spec_stock_msg のセル内容を取る
+    m = re.search(r'id="spec_stock_msg"[^>]*>\s*(.*?)\s*</', html, re.S)
+    cell = m.group(1) if m else ""
+    # 在庫なしマーカー: × (&#215; / ×) または soldout.gif
+    sold = ("&#215;" in cell) or ("×" in cell) or ("soldout.gif" in html)
+    has_cart = ("cart.gif" in html) or ("注文する" in html)
+    # soldマーカーがなく、かつカート系があれば在庫あり
+    in_stock = (not sold) and has_cart
+    return in_stock, True, f"東映movic spec_stock_msg(sold={sold},cart={has_cart})"
+
+
+def _check_suruga_soldout_text(item):
+    """駿河屋の検索結果ページ: 商品ブロックの p.price が「品切れ」なら在庫なし、
+    価格表示なら在庫あり。item['filter'] で対象商品ブロックを絞る（商品名/ID）。"""
+    try:
+        html = fetch(item["url"], config.DEFAULT_ENCODING)
+    except Exception as e:
+        print(f"  ⚠ 取得失敗 {item['name']}: {e}")
+        return False, False, ""
+
+    flt = item.get("filter", "")
+    # item_box ブロックに分割し、filter に合致するブロックだけ判定
+    blocks = re.split(r'class="item_?box', html)
+    target_blocks = [b for b in blocks if (not flt) or (flt in b)]
+    if not target_blocks:
+        # フィルタに合致する商品が一覧に無い＝そもそも未掲載。判定不能扱い（誤通知防止）
+        print(f"  ⚠ 対象商品が一覧に見つからず {item['name']}（filter='{flt}'）")
+        return False, False, ""
+
+    # 合致ブロックのどれかが「品切れ」でない（=価格表示で買える）なら在庫あり
+    in_stock = False
+    for b in target_blocks:
+        # 価格ブロックを取り出す
+        pm = re.search(r'class="price[^"]*"[^>]*>(.*?)</', b, re.S)
+        price_txt = pm.group(1) if pm else b[:200]
+        if "品切れ" not in price_txt and re.search(r"[0-9,]+\s*円|￥", price_txt):
+            in_stock = True
+            break
+    return in_stock, True, f"駿河屋検索(対象{len(target_blocks)}件)"
+
+
+def _check_cart_button(item):
+    """カードラッシュ/コトブキヤ等のEC: 「カートに入れる」ボタンがあり soldout でなければ在庫あり。
+    item['filter'] で対象商品ブロックを絞る。文字コードは item['encoding'] 優先。"""
+    enc = item.get("encoding", config.DEFAULT_ENCODING)
+    try:
+        html = fetch(item["url"], enc)
+    except Exception as e:
+        print(f"  ⚠ 取得失敗 {item['name']}: {e}")
+        return False, False, ""
+
+    flt = item.get("filter", "")
+    # filter があれば、その語の周辺（商品ブロック相当）に絞って判定する
+    scope = html
+    if flt and flt in html:
+        idx = html.find(flt)
+        scope = html[max(0, idx - 1500): idx + 1500]
+    elif flt:
+        print(f"  ⚠ 対象商品が見つからず {item['name']}（filter='{flt}'）")
+        return False, False, ""
+
+    sold = ("soldout" in scope) or ("売り切れ" in scope) or ("SOLD OUT" in scope) or ("品切" in scope)
+    has_cart = ("カートに入れる" in scope) or ("カートに追加" in scope) or ("cartinput" in scope)
+    in_stock = has_cart and not sold
+    return in_stock, True, f"cart_button(cart={has_cart},sold={sold})"
 
 
 def compute_page_signature(item):
@@ -183,12 +265,14 @@ def run_once():
             continue
 
         new_state[key] = in_stock
+        first_seen = key not in prev  # 初回は通知抑制（基準記録のみ）
         was = prev.get(key, False)
+        was = bool(was) if isinstance(was, bool) else False
         status = "在庫あり🟢" if in_stock else "在庫なし🔴"
         change = ""
-        # 在庫系の前回状態が bool でない（page_update から型が変わった等）場合に備え bool 化
-        was = bool(was) if isinstance(was, bool) else False
-        if in_stock and not was:
+        if first_seen:
+            change = "  （初回・基準を記録）"
+        elif in_stock and not was:
             change = f"  ← 復活！（{detail}）"
             alerts.append((item, detail))
         detail_note = f" [{detail}]" if detail else ""
