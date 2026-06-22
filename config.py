@@ -32,6 +32,16 @@ WATCH_ITEMS = [
         "retail_price": 5280,
         "key": "op16_kessen",
     },
+    {
+        # 【C: 再販告知の監視】OP-16の再販入荷情報まとめ（40社以上集約）。
+        # 在庫の「瞬間」ではなく再販告知の「更新」を検知する。間引きに強い保険。
+        # 在庫監視(toei)が見逃しても、告知更新で数時間〜数日前に構えられる。
+        "name": "OP-16 再販告知まとめ（anime-matsuri）",
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/onepiececard-kessennokoku-op16-reservation-lottery/",
+        "retail_price": 5280,
+        "key": "op16_restock_news",
+    },
     # 追加の監視品はここに足す（方針順守: 非酒類・正規新品・未開封のまま売れる）
 ]
 
@@ -43,6 +53,12 @@ GDB_SHOP_BLOCK_CLASS = "shop_status_container"
 # 商品ページ埋め込みJSONの stock_status を読む。"0" は在庫なし、それ以外は在庫あり。
 TOEI_ENCODING = "shift_jis"
 TOEI_INSTOCK_MEANS_NOT = "0"  # stock_status がこの値なら在庫なし
+
+# --- page_update 方式（再販告知ページの更新検知）の設定 ---
+# ページから再販関連の本文だけを抽出し、正規化してハッシュ化。前回ハッシュと変われば
+# 「告知が更新された」と判定して通知する。広告等のノイズを除くため抽出範囲を絞る。
+# 「受付中/予約/抽選/先着/再販/入荷」と日付の周辺テキストを抽出対象にする。
+PAGE_UPDATE_KEYWORDS = ["受付中", "予約", "抽選", "先着", "再販", "入荷"]
 
 # 既定の文字コード（明示しないサイト用）
 DEFAULT_ENCODING = "utf-8"

@@ -2,8 +2,10 @@ name: Check Gunpla Restock
 
 on:
   schedule:
-    # 10分ごと（再販は突発的。Q1入手再現性の検証用）
-    - cron: '*/10 * * * *'
+    # GitHub Actions の cron は混雑時に大幅に間引かれる（10分指定→実測2時間に1回）。
+    # 起動機会を増やすため複数の時刻を明示し、各起動でジョブ内ループ（下記 LOOP_COUNT）で
+    # 約9分間粘ることで、1起動あたりの監視カバー時間を広げる。
+    - cron: '0,15,30,45 * * * *'
   workflow_dispatch: # 手動実行も可
 
 concurrency:
@@ -41,6 +43,9 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
           WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          # ジョブ内ループ: 3分おきに4回チェック=約9分粘る（間引き対策）
+          LOOP_COUNT: '4'
+          LOOP_INTERVAL: '180'
         run: python check_stock.py
 
       - name: Save stock state
