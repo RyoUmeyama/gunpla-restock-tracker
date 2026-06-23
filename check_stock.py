@@ -211,6 +211,30 @@ def fetch_altema_box_prices():
     return prices, True
 
 
+def fetch_pricebase_box_price(url):
+    """price-base の個別BOX相場記事から代表価格(中央値的な最頻値)を取得する。
+    他TCG(ワンピ/遊戯王/DBFW)の相場源。altemaがポケカ専門のため。
+    返り値: (price:int|None, ok:bool)。"""
+    headers = {"User-Agent": config.USER_AGENT}
+    try:
+        resp = requests.get(url, headers=headers, timeout=config.REQUEST_TIMEOUT, allow_redirects=True)
+        resp.raise_for_status()
+        html = resp.content.decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"  ⚠ price-base取得失敗: {e}")
+        return None, False
+
+    # BOX価格帯(3000〜200000円)の数値を集め、最頻値を代表価格とする。
+    nums = [int(p.replace(",", "")) for p in re.findall(r"([0-9,]{4,})\s*円", html)]
+    box_nums = [n for n in nums if 3000 <= n <= 200000]
+    if not box_nums:
+        return None, False
+    # 最頻値（同値が多い=相場本体）。同数なら中央値寄り。
+    from collections import Counter
+    most_common, _ = Counter(box_nums).most_common(1)[0]
+    return most_common, True
+
+
 def passes_profit(retail, market, is_pokeca):
     """相場選別: 市場価格と定価から、監視ON/除外を判定する。
     返り値: 'active'(監視ON) / 'dropped'(除外) / 'unknown'(判定不能=安全側で監視継続)。
@@ -412,14 +436,22 @@ def run_price_screen(prev, new_state):
         if not retail:
             continue
         name = item["name"]
-        # altema相場辞書から銘柄名で部分一致
         market = None
-        for k, v in prices.items():
-            core = name.replace("ポケカ ", "").replace(" BOX", "").replace(" 再販集約", "")
-            if core and (core in k or k in core):
-                market = v
-                break
+        # 相場源: item に price_url(price-base個別記事)があれば他TCGもそこから取る。
+        # なければポケカは altema辞書から銘柄名で部分一致（altemaはポケカ専門）。
+        if item.get("price_url"):
+            market, pok = fetch_pricebase_box_price(item["price_url"])
+            time.sleep(config.REQUEST_INTERVAL)
+            if not pok:
+                market = None
+        else:
+            for k, v in prices.items():
+                core = name.replace("ポケカ ", "").replace(" BOX", "").replace(" 再販集約", "")
+                if core and (core in k or k in core):
+                    market = v
+                    break
         if market is None:
+            # 相場取れず＝判定不能。他TCGで相場源未設定の場合はここに来る（安全側=監視継続）。
             continue
         is_pokeca = ("ポケカ" in name) or ("ポケモンカード" in name)
         verdict = passes_profit(retail, market, is_pokeca)

@@ -60,6 +60,8 @@ WATCH_ITEMS = [
         "method": "page_update",
         "url": "https://nyuka-now.com/archives/140408",
         "retail_price": 5280,
+        # 他TCGの相場源(price-base個別記事)。altemaはポケカ専門のため。
+        "price_url": "https://price-base.com/useful/crossforce-box-market",
         "key": "dbfw_fb10_news",
     },
     {
