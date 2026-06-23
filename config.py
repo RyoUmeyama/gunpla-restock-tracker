@@ -46,13 +46,37 @@ WATCH_ITEMS = [
     # と判明したため、確実な個別在庫判定(東映公式・GunplaDatabase)＋集約ページ更新検知
     # (nyuka-now の page_update)に一本化。誤検知ゼロで在庫変動・再販告知を広く拾う。
 
-    # --- 個別在庫判定（実地検証で安定・確実なものだけ）---
+    # --- 個別在庫判定（東映stock_status。実地検証で安定・確実）---
+    # 商品コードは東映ストアのLightningSearch API(DType=Genre)で全件取得・確定済み(2026-06-23)。
     {
         "name": "DBFW MANGA BOOSTER 02 [SB02] BOX（在庫）",
         "method": "toei_stock_status",
         "url": "https://store.toei-anim.co.jp/shop/g/gDBS00124O1/",
         "retail_price": 7920,
         "key": "dbfw_sb02_stock",
+    },
+    {
+        "name": "DBFW MANGA BOOSTER 01 [SB01] BOX（在庫）",
+        "method": "toei_stock_status",
+        "url": "https://store.toei-anim.co.jp/shop/g/gDBS00120O1/",
+        "retail_price": 7920,
+        "key": "dbfw_sb01_stock",
+    },
+    {
+        # OP-10「王族の血統」=プレミア化(price-base買取9,500円)。RSS発見器が再販記事を検知した本体。
+        "name": "ワンピ OP-10 王族の血統 BOX（在庫）",
+        "method": "toei_stock_status",
+        "url": "https://store.toei-anim.co.jp/shop/g/gONP01938O1/",
+        "retail_price": 5280,
+        "price_url": "https://price-base.com/useful/ouzokunokettou-box-market",
+        "key": "onepiece_op10_stock",
+    },
+    {
+        "name": "ワンピ OP-15 神の島の冒険 BOX（在庫）",
+        "method": "toei_stock_status",
+        "url": "https://store.toei-anim.co.jp/shop/g/gONP03128O1/",
+        "retail_price": 5280,
+        "key": "onepiece_op15_stock",
     },
     # --- 集約ページ更新検知（page_update。誤検知なし・在庫変動/再販告知を拾う）---
     {
@@ -203,6 +227,11 @@ WATCH_KEYWORDS = [
 ]
 # 動的監視候補の上限（net利益降順で上位のみ。暴走防止）
 MAX_DISCOVERED_ITEMS = 30
+
+# --- Phase2.5: 東映LightningSearch APIで新弾BOXを自動発見 ---
+# ワンピ/DBFWの新弾BOXが出たら通知。商品ページは toei_stock_status で在庫監視可能。
+TOEI_SEARCH_API = "https://d17aii3v2u8mk9.cloudfront.net/api/search"
+TOEI_GENRE_CODES = ["104616", "102022"]  # 104616=ワンピカード, 102022=DBFW
 
 # --- Phase3: 相場選別（価値が落ちた旧銘柄を自動除外）---
 # 相場ソース: altema BOX買取価格表（静的HTML・堅牢。現金化下限の保守指標）。

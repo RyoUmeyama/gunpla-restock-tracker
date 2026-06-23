@@ -251,6 +251,45 @@ def passes_profit(retail, market, is_pokeca):
     return "unknown"  # 中間帯は監視継続（安全側）
 
 
+def discover_toei_new_boxes():
+    """Phase2.5: 東映ストアのLightningSearch APIから、ワンピ/DBFWのBOX系新商品を発見する。
+    新弾のgoodsコードが出たら通知＋その商品ページを在庫監視候補として記録する。
+    返り値: (boxes: dict[goods->{name,price,url,stockMsg}], ok: bool)。"""
+    headers = {"User-Agent": config.USER_AGENT, "Referer": "https://store.toei-anim.co.jp/"}
+    boxes = {}
+    any_ok = False
+    for dcode in config.TOEI_GENRE_CODES:
+        try:
+            resp = requests.get(
+                config.TOEI_SEARCH_API,
+                params={"DType": "Genre", "DCode": dcode, "ItemPerPage": "200"},
+                headers=headers, timeout=config.REQUEST_TIMEOUT,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            any_ok = True
+            for it in data.get("searchResults", []):
+                name = (it.get("name") or "").strip()
+                goods = (it.get("goods") or "").strip()
+                # BOX系だけ拾う（「BOX」を名前に含む。スタートデッキ等は除外）
+                if not goods or "BOX" not in name:
+                    continue
+                try:
+                    price = int(it.get("price") or 0)
+                except (ValueError, TypeError):
+                    price = 0
+                boxes[goods] = {
+                    "name": name,
+                    "price": price,
+                    "url": f"https://store.toei-anim.co.jp/shop/g/g{goods}/",
+                    "stockMsg": it.get("stockMsg", ""),
+                }
+            time.sleep(config.REQUEST_INTERVAL)
+        except Exception as e:
+            print(f"  ⚠ 東映API取得失敗(DCode={dcode}): {e}")
+    return boxes, any_ok
+
+
 def discover_from_rss():
     """nyuka-now のRSSフィードから、監視キーワードに合致する商品(入荷/再販)を発見する。
     返り値: (found: dict[link->{title,link}], ok: bool)。ok=False は全フィード取得失敗。
@@ -417,6 +456,30 @@ def run_discovery(prev, new_state, alerts):
         alerts.append((disco_item, "新規発見: " + " / ".join(lines)))
     else:
         print(f"  RSS発見器: 新規なし（既知{len(discovered)}件）")
+
+    # Phase2.5: 東映APIでワンピ/DBFWの新弾BOXを発見（goodsコード差分）
+    boxes, ok2 = discover_toei_new_boxes()
+    toei_known = dict(prev.get("toei_boxes", {}))
+    if not ok2:
+        new_state["toei_boxes"] = toei_known
+        print("  東映新弾発見: 判定不能（前回状態を維持）")
+        return
+    first_toei = "toei_boxes" not in prev
+    fresh_boxes = [g for g in boxes if g not in toei_known]
+    new_state["toei_boxes"] = boxes  # 現在の全BOXコードを保存
+    if first_toei:
+        print(f"  東映新弾発見: 初回・{len(boxes)}BOXを記録（通知なし）")
+    elif fresh_boxes:
+        names = "、".join(boxes[g]["name"][:30] for g in fresh_boxes[:5])
+        print(f"  東映新弾発見: 新弾{len(fresh_boxes)}件🔔 ← 通知（{names}）")
+        lines = [
+            f"{boxes[g]['name'][:40]}（定価{boxes[g]['price']}円）{boxes[g]['url']}"
+            for g in fresh_boxes[:5]
+        ]
+        toei_item = {"name": "東映 新弾BOX検知（在庫監視に追加候補）", "url": "https://store.toei-anim.co.jp/", "retail_price": 0}
+        alerts.append((toei_item, "東映新弾: " + " / ".join(lines)))
+    else:
+        print(f"  東映新弾発見: 新弾なし（{len(boxes)}BOX）")
 
 
 def run_price_screen(prev, new_state):
