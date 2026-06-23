@@ -30,9 +30,9 @@ jobs:
           path: stock_state.json
           # v2: page_update のハッシュ計算を変更(揮発日付フィルタ追加)したため
           # 旧ハッシュのcacheを引き継がない。これで新フィルタの基準から開始し誤発火を防ぐ。
-          key: gunpla-stock-state-v3-${{ github.run_id }}
+          key: gunpla-stock-state-v4-${{ github.run_id }}
           restore-keys: |
-            gunpla-stock-state-v3-
+            gunpla-stock-state-v4-
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -62,4 +62,4 @@ jobs:
         if: always()
         with:
           path: stock_state.json
-          key: gunpla-stock-state-v3-${{ github.run_id }}
+          key: gunpla-stock-state-v4-${{ github.run_id }}

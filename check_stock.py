@@ -17,12 +17,18 @@ import sys
 import json
 import time
 import hashlib
+from datetime import datetime
 
 import requests
 
 import config
 from email_utils import send_email_with_retry
 from webhook_utils import send_webhook
+
+
+def _this_year():
+    """現在の年（西暦）。ポケカ新弾の発売日フィルタを年経過で自動追従させるため。"""
+    return datetime.now().year
 
 
 def fetch(url, encoding):
@@ -257,7 +263,8 @@ def discover_toei_new_boxes():
     返り値: (boxes: dict[goods->{name,price,url,stockMsg}], ok: bool)。"""
     headers = {"User-Agent": config.USER_AGENT, "Referer": "https://store.toei-anim.co.jp/"}
     boxes = {}
-    any_ok = False
+    all_ok = True  # 全ジャンル成功時のみTrue。一部失敗で全置換すると消えたジャンルが
+                   # 次回「新弾」と誤検知されるため(H1)、all成功時だけ差分判定に使う。
     for dcode in config.TOEI_GENRE_CODES:
         try:
             resp = requests.get(
@@ -267,7 +274,6 @@ def discover_toei_new_boxes():
             )
             resp.raise_for_status()
             data = resp.json()
-            any_ok = True
             for it in data.get("searchResults", []):
                 name = (it.get("name") or "").strip()
                 goods = (it.get("goods") or "").strip()
@@ -287,7 +293,8 @@ def discover_toei_new_boxes():
             time.sleep(config.REQUEST_INTERVAL)
         except Exception as e:
             print(f"  ⚠ 東映API取得失敗(DCode={dcode}): {e}")
-    return boxes, any_ok
+            all_ok = False  # 1ジャンルでも失敗したら判定不能扱い
+    return boxes, all_ok
 
 
 def discover_from_rss():
@@ -296,13 +303,12 @@ def discover_from_rss():
     ※規約配慮: 低頻度・キャッシュTTLで運用（FEED_URLSは最小限に絞る）。"""
     headers = {"User-Agent": config.USER_AGENT}
     found = {}
-    any_ok = False
+    all_ok = True  # 全フィード成功時のみTrue（一部失敗での誤発見を防ぐ・H2）
     for feed_url in config.FEED_URLS:
         try:
             resp = requests.get(feed_url, headers=headers, timeout=config.REQUEST_TIMEOUT, allow_redirects=True)
             resp.raise_for_status()
             xml = resp.content.decode("utf-8", errors="replace")
-            any_ok = True
             for block in re.findall(r"<item>(.*?)</item>", xml, re.S):
                 tm = re.search(r"<title>(.*?)</title>", block, re.S)
                 lm = re.search(r"<link>(.*?)</link>", block, re.S)
@@ -316,7 +322,8 @@ def discover_from_rss():
             time.sleep(config.REQUEST_INTERVAL)
         except Exception as e:
             print(f"  ⚠ RSS取得失敗({feed_url[:40]}): {e}")
-    return found, any_ok
+            all_ok = False
+    return found, all_ok
 
 
 def fetch_pokecard_new_products():
@@ -343,9 +350,9 @@ def fetch_pokecard_new_products():
                 if not title:
                     continue
                 # 発売日フィルタ: 古い弾を「新商品」と誤検知しないよう、発売年が
-                # POKECARD_MIN_RELEASE_YEAR 以上のものだけ新弾候補にする。
+                # 「今年-1年」以降のものだけ新弾候補にする（年が変わっても自動追従・M5）。
                 ym = re.search(r"(20\d\d)", rdate)
-                if ym and int(ym.group(1)) < config.POKECARD_MIN_RELEASE_YEAR:
+                if ym and int(ym.group(1)) < (_this_year() - 1):
                     continue
                 key = f"{title}|{rdate}"
                 products[key] = {
@@ -406,6 +413,12 @@ def compute_page_signature(item):
             s = re.sub(r"\s+", " ", s).strip()
             if s:
                 picked.append(s)
+
+    # 抽出が0行=本文を拾えていない（JS描画/構造変化等）。空ハッシュを基準化すると
+    # 監視が事実上死に、将来1行拾えた瞬間に誤検知するため、判定不能(前回維持)にする(H3)。
+    if not picked:
+        print(f"  ⚠ 抽出0行 {item['name']}（本文を拾えず・判定不能）")
+        return None, False
 
     # 正規化（重複除去・ソート）してハッシュ化。順序揺れに強くする。
     normalized = "\n".join(sorted(set(picked)))
@@ -582,15 +595,17 @@ def run_once():
             # 告知ページ: 前回ハッシュと変化したら通知（初回は基準値を保存のみ）
             sig, ok = compute_page_signature(item)
             time.sleep(config.REQUEST_INTERVAL)
+            first_seen = key not in prev  # 初回判定はキー存在で統一(H4)
             if not ok:
-                new_state[key] = prev.get(key, "")  # 取得失敗は前回維持
+                # 取得失敗: 前回値があれば維持、無ければキー未設定のまま(次回も初回扱い)
+                if key in prev:
+                    new_state[key] = prev[key]
                 print(f"  {item['name']}: 判定不能（前回状態を維持）")
                 continue
             new_state[key] = sig
-            prev_sig = prev.get(key, "")
-            if prev_sig == "":
+            if first_seen:
                 print(f"  {item['name']}: 初回・基準を記録（通知なし）")
-            elif sig != prev_sig:
+            elif sig != prev.get(key):
                 print(f"  {item['name']}: 告知更新を検知🔔 ← 通知")
                 alerts.append((item, "再販告知が更新されました（受付/予約/再販情報を確認）", "info"))
             else:
