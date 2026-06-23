@@ -84,9 +84,11 @@ WATCH_ITEMS = [
         "key": "pokeca_whiteflare_news",
     },
     {
+        # 検索URL(?s=)は「○年○月○日現在」の揮発日付＋無関係記事の混入で毎回ハッシュ変化
+        # していたため、ホワイトフレア(145377)と対の安定した個別まとめ記事に差し替え。
         "name": "ポケカ ブラックボルト 再販集約",
         "method": "page_update",
-        "url": "https://nyuka-now.com/?s=%E3%83%96%E3%83%A9%E3%83%83%E3%82%AF%E3%83%9C%E3%83%AB%E3%83%88",
+        "url": "https://nyuka-now.com/archives/145378",
         "retail_price": 5800,
         "key": "pokeca_blackbolt_news",
     },

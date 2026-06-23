@@ -316,10 +316,12 @@ def compute_page_signature(item):
     )
     # 揮発行: 「○月○日更新」「○時○分時点」「現在、」等を含む行は
     # 再販ゼロでも毎回変わる＝誤検知の元なので、行ごと除外する。
-    volatile_line_re = re.compile(r"更新】|更新\)|時点|現在[、,]|最終更新|本日|今日")
+    # 「現在）」（全角カッコ）も揮発行として除外（nyuka-nowの「○年○月○日現在）」対策）。
+    volatile_line_re = re.compile(r"更新】|更新\)|時点|現在[、,）)]|最終更新|本日|今日")
     # 揮発トークン: 日付・時刻の数値そのものをハッシュから除去（行は残しつつ数値だけ消す）
     volatile_token_re = re.compile(
         r"【?\d{4}年\d{1,2}月\d{1,2}日.*?更新】?"
+        r"|（\d{4}年\d{1,2}月\d{1,2}日現在）"
         r"|\d{1,2}時\d{1,2}分.*?時点"
         r"|\d{1,2}:\d{2}\s*時点"
     )
@@ -531,6 +533,19 @@ def main():
     1起動の中で LOOP_COUNT 回・LOOP_INTERVAL 秒おきにチェックして粘り、
     1起動あたりの監視カバー時間を広げる（争奪戦の見逃しを減らす）。
     """
+    # TEST_NOTIFY=1 のとき: 在庫検知を待たずにテスト通知を1本送り、通知経路(Secrets)を点検する。
+    # 通知は「在庫復活時」しか走らないため、Secrets再登録の確認手段としてこれを使う。
+    if os.environ.get("TEST_NOTIFY") == "1":
+        print("=== TEST_NOTIFY: 通知経路テスト ===")
+        test_item = {
+            "name": "【通知経路テスト】これはテスト送信です",
+            "url": "https://github.com/RyoUmeyama/gunpla-restock-tracker",
+            "retail_price": 0,
+        }
+        notify([(test_item, "Secrets再登録後の疎通確認。届けばメール/Discordとも正常。")])
+        print("=== テスト送信 完了 ===")
+        return
+
     loop_count = int(os.environ.get("LOOP_COUNT", "1"))
     loop_interval = int(os.environ.get("LOOP_INTERVAL", "180"))  # 秒
 
