@@ -42,6 +42,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Debug secrets (値は伏せ、長さと先頭1字だけ)
+        if: ${{ github.event.inputs.test_notify == '1' }}
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+        run: |
+          python -c "import os; v=os.environ.get('SMTP_SERVER',''); print('SMTP_SERVER len=%d head=%r contains_dot=%s' % (len(v), v[:1], '.' in v))"
+          python -c "import os; v=os.environ.get('SMTP_PORT',''); print('SMTP_PORT len=%d head=%r' % (len(v), v[:1]))"
+          python -c "import os; v=os.environ.get('WEBHOOK_URL',''); print('WEBHOOK_URL len=%d head=%r starts_https=%s' % (len(v), v[:1], v.startswith('https')))"
+
       - name: Run stock checker
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
