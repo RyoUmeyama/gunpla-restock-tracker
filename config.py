@@ -69,6 +69,7 @@ WATCH_ITEMS = [
         "method": "page_update",
         "url": "https://nyuka-now.com/archives/151955",
         "retail_price": 7920,
+        "price_url": "https://price-base.com/useful/mangabooster01-box-market",
         "key": "dbfw_sb01_news",
     },
     {
@@ -99,6 +100,8 @@ WATCH_ITEMS = [
         "method": "page_update",
         "url": "https://nyuka-now.com/archives/97073",
         "retail_price": 5280,
+        # OP-16「決戦の刻」相場。slugはkessen(kessennotokiでない)。
+        "price_url": "https://price-base.com/useful/kessen-box-market",
         "key": "onepiece_cross_news",
     },
     {
@@ -116,10 +119,12 @@ WATCH_ITEMS = [
         "key": "yugioh_rc04_news",
     },
     {
+        # 現行弾 CT-P09「疾風の煌めき」(定価5,544円)。price-base相場6,100円。
         "name": "名探偵コナンTCG 再販集約",
         "method": "page_update",
         "url": "https://nyuka-now.com/archives/143009",
-        "retail_price": 7392,
+        "retail_price": 5544,
+        "price_url": "https://price-base.com/useful/shippunokirameki-box-market",
         "key": "conan_tcg_news",
     },
     {
