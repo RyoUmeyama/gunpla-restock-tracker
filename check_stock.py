@@ -342,6 +342,11 @@ def fetch_pokecard_new_products():
                 rdate = (p.get("releaseDate") or "").strip()
                 if not title:
                     continue
+                # 発売日フィルタ: 古い弾を「新商品」と誤検知しないよう、発売年が
+                # POKECARD_MIN_RELEASE_YEAR 以上のものだけ新弾候補にする。
+                ym = re.search(r"(20\d\d)", rdate)
+                if ym and int(ym.group(1)) < config.POKECARD_MIN_RELEASE_YEAR:
+                    continue
                 key = f"{title}|{rdate}"
                 products[key] = {
                     "title": title,
@@ -453,7 +458,7 @@ def run_discovery(prev, new_state, alerts):
         lines = [f"{found[lk]['title']} {found[lk]['link']}" for lk in fresh[:8]]
         # 発見通知用の疑似item
         disco_item = {"name": "新弾・再販を発見（RSS）", "url": config.FEED_URLS[0], "retail_price": 0}
-        alerts.append((disco_item, "新規発見: " + " / ".join(lines)))
+        alerts.append((disco_item, "新規発見: " + " / ".join(lines), "info"))
     else:
         print(f"  RSS発見器: 新規なし（既知{len(discovered)}件）")
 
@@ -477,7 +482,7 @@ def run_discovery(prev, new_state, alerts):
             for g in fresh_boxes[:5]
         ]
         toei_item = {"name": "東映 新弾BOX検知（在庫監視に追加候補）", "url": "https://store.toei-anim.co.jp/", "retail_price": 0}
-        alerts.append((toei_item, "東映新弾: " + " / ".join(lines)))
+        alerts.append((toei_item, "東映新弾: " + " / ".join(lines), "info"))
     else:
         print(f"  東映新弾発見: 新弾なし（{len(boxes)}BOX）")
 
@@ -568,7 +573,7 @@ def run_once():
                     for k in fresh:
                         p = products[k]
                         detail_lines.append(f"{p['title']}（{p['releaseDate']} {p['price']}）{p['link']}")
-                    alerts.append((item, "ポケカ新商品: " + " / ".join(detail_lines[:5])))
+                    alerts.append((item, "ポケカ新商品: " + " / ".join(detail_lines[:5]), "info"))
                 else:
                     print(f"  {item['name']}: 新商品なし（{len(cur_keys)}商品）")
             continue
@@ -587,7 +592,7 @@ def run_once():
                 print(f"  {item['name']}: 初回・基準を記録（通知なし）")
             elif sig != prev_sig:
                 print(f"  {item['name']}: 告知更新を検知🔔 ← 通知")
-                alerts.append((item, "再販告知が更新されました（受付/予約/再販情報を確認）"))
+                alerts.append((item, "再販告知が更新されました（受付/予約/再販情報を確認）", "info"))
             else:
                 print(f"  {item['name']}: 更新なし")
             continue
@@ -610,7 +615,7 @@ def run_once():
             change = "  （初回・基準を記録）"
         elif in_stock and not was:
             change = f"  ← 復活！（{detail}）"
-            alerts.append((item, detail))
+            alerts.append((item, detail, "stock"))  # 在庫検知=緊急(買える)
         detail_note = f" [{detail}]" if detail else ""
         print(f"  {item['name']}: {status}{detail_note}{change}")
 
@@ -637,7 +642,7 @@ def main():
             "url": "https://github.com/RyoUmeyama/gunpla-restock-tracker",
             "retail_price": 0,
         }
-        notify([(test_item, "Secrets再登録後の疎通確認。届けばメール/Discordとも正常。")])
+        notify([(test_item, "Secrets再登録後の疎通確認。届けばメール/Discordとも正常。", "stock")])
         print("=== テスト送信 完了 ===")
         return
 
@@ -656,31 +661,54 @@ def main():
     print("=== 完了 ===")
 
 
-def build_messages(restocked):
-    """restocked: [(item, detail)] → (subject, text, html, webhook_title, webhook_lines)"""
-    n = len(restocked)
-    subject = f"🤖【在庫検知】転売検証 {n}件 在庫あり！（要・定価確認）"
+def build_messages(alerts):
+    """alerts: [(item, detail, kind)] → (subject, text, html, webhook_title, webhook_lines)
+    kind="stock"(在庫検知=緊急・買える) と "info"(新弾/告知/発見=お知らせ) で文面を分ける。
+    後方互換: 2要素タプルは kind="stock" 扱い。"""
+    norm = []
+    for a in alerts:
+        if len(a) == 3:
+            norm.append(a)
+        else:
+            norm.append((a[0], a[1], "stock"))
 
-    text_lines = ["狙いの商品の在庫を検知しました！", config.NOTE, ""]
-    web_lines = [config.NOTE, ""]
+    has_stock = any(k == "stock" for _, _, k in norm)
+    n = len(norm)
+
+    if has_stock:
+        # 在庫検知が含まれる=緊急。買える可能性があるので煽り文。
+        subject = f"🤖【在庫検知】転売検証 {n}件（要・定価確認）"
+        headline = "🤖 転売検証 在庫検知！"
+        note = config.NOTE  # 「数分で完売の可能性大。即購入→即売り」
+        color = "#c00"
+    else:
+        # お知らせ系のみ(新弾・告知更新・発見)。緊急でないので穏やかに。
+        subject = f"📣【お知らせ】転売検証 新弾/再販情報 {n}件"
+        headline = "📣 転売検証 新弾・再販のお知らせ"
+        note = "新弾・再販・告知の更新を検知しました（在庫が買える状態とは限りません。リンク先で確認を）。"
+        color = "#36c"
+
+    text_lines = [headline, note, ""]
+    web_lines = [note, ""]
     html_rows = []
-    for item, detail in restocked:
-        line = f"・{item['name']}（定価{item['retail_price']:,}円）{detail}"
-        text_lines.append(line)
+    for item, detail, kind in norm:
+        tag = "【在庫】" if kind == "stock" else "【お知らせ】"
+        price = f"（定価{item['retail_price']:,}円）" if item.get("retail_price") else ""
+        line = f"{tag}{item['name']}{price} {detail}"
+        text_lines.append("・" + line)
         text_lines.append(f"  {item['url']}")
         text_lines.append("")
-        web_lines.append(line)
+        web_lines.append("・" + line)
         web_lines.append(item["url"])
         html_rows.append(
-            f'<li style="margin-bottom:10px;"><strong>{item["name"]}</strong>'
-            f'（定価{item["retail_price"]:,}円）{detail}<br>'
-            f'<a href="{item["url"]}">{item["url"]}</a></li>'
+            f'<li style="margin-bottom:10px;"><strong>{tag}{item["name"]}</strong>'
+            f'{price} {detail}<br><a href="{item["url"]}">{item["url"]}</a></li>'
         )
     text = "\n".join(text_lines)
     html = (
         '<html><body style="font-family:sans-serif;">'
-        '<h2 style="color:#c00;">🤖 転売検証 在庫検知！</h2>'
-        f"<p>{config.NOTE}</p><ul>{''.join(html_rows)}</ul>"
+        f'<h2 style="color:{color};">{headline}</h2>'
+        f"<p>{note}</p><ul>{''.join(html_rows)}</ul>"
         '<p style="color:#888;font-size:12px;">転売検証 在庫トラッカーより自動送信</p>'
         "</body></html>"
     )
