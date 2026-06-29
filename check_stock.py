@@ -230,15 +230,52 @@ def fetch_pricebase_box_price(url):
         print(f"  ⚠ price-base取得失敗: {e}")
         return None, False
 
-    # BOX価格帯(3000〜200000円)の数値を集め、最頻値を代表価格とする。
+    # BOX価格帯(3000〜200000円)の数値を集め、中央値を代表価格とする。
+    # 中央値は外れ値(極端な広告・セット品価格)に強く、最頻値の同数ブレ問題も避けられる。
     nums = [int(p.replace(",", "")) for p in re.findall(r"([0-9,]{4,})\s*円", html)]
-    box_nums = [n for n in nums if 3000 <= n <= 200000]
+    box_nums = sorted(n for n in nums if 3000 <= n <= 200000)
     if not box_nums:
         return None, False
-    # 最頻値（同値が多い=相場本体）。同数なら中央値寄り。
-    from collections import Counter
-    most_common, _ = Counter(box_nums).most_common(1)[0]
-    return most_common, True
+    mid = len(box_nums) // 2
+    if len(box_nums) % 2:
+        median = box_nums[mid]
+    else:
+        median = (box_nums[mid - 1] + box_nums[mid]) // 2
+    return median, True
+
+
+def _normalize_box_name(s):
+    """相場照合用に銘柄名を正規化する。装飾語・記号・空白を落として比較精度を上げる。
+    全角/半角スペース・中黒・括弧類を除去し、監視名固有の装飾(ポケカ/BOX/再販集約等)も削る。"""
+    s = s or ""
+    for w in ("ポケカ ", "ポケモンカード ", " BOX", "BOX", " 再販集約", "再販集約",
+              "（横断）", "(横断)", "（在庫）", "(在庫)"):
+        s = s.replace(w, "")
+    # 空白・中黒・括弧などの照合ノイズを除去
+    s = re.sub(r"[\s　・,，()（）\[\]【】]", "", s)
+    return s
+
+
+def match_altema_price(name, prices):
+    """altema相場辞書から監視名 name に対応する買取価格を選ぶ。
+    正規化後、(1)完全一致を最優先。(2)無ければ『監視名コアが altema銘柄名に含まれる』
+    候補のうち最短(=余計な装飾やセット品でない単品)を選ぶ。
+    altemaは単品BOX名が正解で、長い名前はセット/同梱品など別物の罠のため最短を採る。
+    返り値: price(int) | None。"""
+    core = _normalize_box_name(name)
+    if len(core) < 3:  # 短すぎるコアは誤マッチしやすいので照合しない
+        return None
+    candidates = []  # (正規化altema名長, price)
+    for k, v in prices.items():
+        nk = _normalize_box_name(k)
+        if core == nk:
+            return v  # 完全一致が最優先
+        if core in nk:
+            candidates.append((len(nk), v))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0])  # 最短=最も単品に近い
+    return candidates[0][1]
 
 
 def passes_profit(retail, market, is_pokeca):
@@ -526,11 +563,7 @@ def run_price_screen(prev, new_state):
             if not pok:
                 market = None
         else:
-            for k, v in prices.items():
-                core = name.replace("ポケカ ", "").replace(" BOX", "").replace(" 再販集約", "")
-                if core and (core in k or k in core):
-                    market = v
-                    break
+            market = match_altema_price(name, prices)
         if market is None:
             # 相場取れず＝判定不能。他TCGで相場源未設定の場合はここに来る（安全側=監視継続）。
             continue
@@ -546,6 +579,9 @@ def run_price_screen(prev, new_state):
         if verdict == "dropped" and drop_counts[key] >= config.DROP_CONFIRM_COUNT:
             flag = f"  ⚠除外候補(連続{drop_counts[key]}回・自動除外は未有効)"
         print(f"    {name[:24]}: 定価{retail} 相場{market} 手残り{net:+.0f}円 → {verdict}{flag}")
+    # 監視対象から外した銘柄の drop_counts は残さない（stateの肥大・幽霊キー防止）。
+    valid_keys = {it["key"] for it in config.WATCH_ITEMS}
+    drop_counts = {k: c for k, c in drop_counts.items() if k in valid_keys}
     new_state["drop_counts"] = drop_counts
 
 

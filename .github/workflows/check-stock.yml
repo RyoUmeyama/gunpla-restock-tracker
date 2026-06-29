@@ -28,8 +28,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: stock_state.json
-          # v2: page_update のハッシュ計算を変更(揮発日付フィルタ追加)したため
-          # 旧ハッシュのcacheを引き継がない。これで新フィルタの基準から開始し誤発火を防ぐ。
+          # page_update のハッシュ計算を変えたらこのキーのバージョンを上げる(v4→v5...)。
+          # 旧ハッシュのcacheを引き継がないことで、新フィルタの基準から開始し誤発火を防ぐ。
           key: gunpla-stock-state-v4-${{ github.run_id }}
           restore-keys: |
             gunpla-stock-state-v4-
