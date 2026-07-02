@@ -18,6 +18,7 @@ import json
 import time
 import hashlib
 from datetime import datetime
+from urllib.parse import urlsplit
 
 import requests
 
@@ -31,10 +32,31 @@ def _this_year():
     return datetime.now().year
 
 
-def fetch(url, encoding):
-    headers = {"User-Agent": config.USER_AGENT}
-    resp = requests.get(url, headers=headers, timeout=config.REQUEST_TIMEOUT)
+# 同一パス内で接続不能（connectタイムアウト等）だったホスト。
+# 例: nyuka-now.com は GitHub Actions のクラウドIPを遮断しており、20秒タイムアウト×11URL×4パス
+# ＝1起動で約15分を浪費していた（Actions課金枠の主因）。初回失敗でホスト単位でスキップする。
+_UNREACHABLE_HOSTS = set()
+
+
+def http_get(url, **kwargs):
+    """requests.get のラッパ。接続不能ホストはパス内で再試行せず即座に諦める。
+    タイムアウト・UAは未指定なら既定値を補う。raise_for_status 済みの Response を返す。"""
+    host = urlsplit(url).netloc
+    if host in _UNREACHABLE_HOSTS:
+        raise ConnectionError(f"{host} は接続不能（このパスではスキップ）")
+    kwargs.setdefault("timeout", config.REQUEST_TIMEOUT)
+    headers = kwargs.pop("headers", None) or {"User-Agent": config.USER_AGENT}
+    try:
+        resp = requests.get(url, headers=headers, **kwargs)
+    except (requests.exceptions.ConnectTimeout, requests.exceptions.ConnectionError):
+        _UNREACHABLE_HOSTS.add(host)
+        raise
     resp.raise_for_status()
+    return resp
+
+
+def fetch(url, encoding):
+    resp = http_get(url)
     return resp.content.decode(encoding, errors="replace")
 
 
@@ -191,10 +213,8 @@ def fetch_altema_box_prices():
     """altemaのポケカBOX買取価格表から {BOX名: 買取価格(int)} を取得する。
     相場選別(passes_profit)の保守的な現金化下限指標として使う。
     返り値: (prices: dict[str->int], ok: bool)。"""
-    headers = {"User-Agent": config.USER_AGENT}
     try:
-        resp = requests.get(config.ALTEMA_BOX_URL, headers=headers, timeout=config.REQUEST_TIMEOUT)
-        resp.raise_for_status()
+        resp = http_get(config.ALTEMA_BOX_URL)
         html = resp.content.decode("utf-8", errors="replace")
     except Exception as e:
         print(f"  ⚠ altema相場取得失敗: {e}")
@@ -221,10 +241,8 @@ def fetch_pricebase_box_price(url):
     """price-base の個別BOX相場記事から代表価格(中央値的な最頻値)を取得する。
     他TCG(ワンピ/遊戯王/DBFW)の相場源。altemaがポケカ専門のため。
     返り値: (price:int|None, ok:bool)。"""
-    headers = {"User-Agent": config.USER_AGENT}
     try:
-        resp = requests.get(url, headers=headers, timeout=config.REQUEST_TIMEOUT, allow_redirects=True)
-        resp.raise_for_status()
+        resp = http_get(url, allow_redirects=True)
         html = resp.content.decode("utf-8", errors="replace")
     except Exception as e:
         print(f"  ⚠ price-base取得失敗: {e}")
@@ -304,12 +322,11 @@ def discover_toei_new_boxes():
                    # 次回「新弾」と誤検知されるため(H1)、all成功時だけ差分判定に使う。
     for dcode in config.TOEI_GENRE_CODES:
         try:
-            resp = requests.get(
+            resp = http_get(
                 config.TOEI_SEARCH_API,
                 params={"DType": "Genre", "DCode": dcode, "ItemPerPage": "200"},
-                headers=headers, timeout=config.REQUEST_TIMEOUT,
+                headers=headers,
             )
-            resp.raise_for_status()
             data = resp.json()
             for it in data.get("searchResults", []):
                 name = (it.get("name") or "").strip()
@@ -334,17 +351,28 @@ def discover_toei_new_boxes():
     return boxes, all_ok
 
 
+def _title_matches(title):
+    """RSS発見器のタイトル選別。監視キーワード合致が前提。
+    ポケカ関連は別格（方針: 関連全部を定価なら狙う）で広く拾う。
+    それ以外はサプライ用品（スリーブ/デッキケース等）を除外し、BOX/パック本体に絞る。
+    従来は「ワンピース」等の部分一致だけだったため、デッキセットやサプライまで
+    発見通知に混ざっていた（通知精度低下の一因）。"""
+    if not any(kw in title for kw in config.WATCH_KEYWORDS):
+        return False
+    if any(kw in title for kw in config.POKECA_TITLE_KEYWORDS):
+        return True
+    return not any(kw in title for kw in config.EXCLUDE_TITLE_KEYWORDS)
+
+
 def discover_from_rss():
     """nyuka-now のRSSフィードから、監視キーワードに合致する商品(入荷/再販)を発見する。
     返り値: (found: dict[link->{title,link}], ok: bool)。ok=False は全フィード取得失敗。
     ※規約配慮: 低頻度・キャッシュTTLで運用（FEED_URLSは最小限に絞る）。"""
-    headers = {"User-Agent": config.USER_AGENT}
     found = {}
     all_ok = True  # 全フィード成功時のみTrue（一部失敗での誤発見を防ぐ・H2）
     for feed_url in config.FEED_URLS:
         try:
-            resp = requests.get(feed_url, headers=headers, timeout=config.REQUEST_TIMEOUT, allow_redirects=True)
-            resp.raise_for_status()
+            resp = http_get(feed_url, allow_redirects=True)
             xml = resp.content.decode("utf-8", errors="replace")
             for block in re.findall(r"<item>(.*?)</item>", xml, re.S):
                 tm = re.search(r"<title>(.*?)</title>", block, re.S)
@@ -353,8 +381,8 @@ def discover_from_rss():
                     continue
                 title = re.sub(r"<!\[CDATA\[|\]\]>", "", tm.group(1)).strip()
                 link = lm.group(1).strip()
-                # 監視キーワードに合致するものだけ拾う（ポケカ別格＝ポケカ語は広く）
-                if any(kw in title for kw in config.WATCH_KEYWORDS):
+                # 監視キーワードに合致するものだけ拾う（ポケカ別格＝広く／他はサプライ除外）
+                if _title_matches(title):
                     found[link] = {"title": title, "link": link}
             time.sleep(config.REQUEST_INTERVAL)
         except Exception as e:
@@ -369,16 +397,11 @@ def fetch_pokecard_new_products():
     各商品を (productTitle, releaseDate) のキーで返す。
     返り値: (products: dict[key->info], ok: bool)。ok=False は全カテゴリ取得失敗。"""
     base = "https://www.pokemon-card.com/products/resultAPI.php"
-    headers = {"User-Agent": config.USER_AGENT}
     products = {}
     any_ok = False
     for ptype in config.POKECARD_PRODUCT_TYPES:
         try:
-            resp = requests.get(
-                base, params={"productType": ptype, "page": "1"},
-                headers=headers, timeout=config.REQUEST_TIMEOUT,
-            )
-            resp.raise_for_status()
+            resp = http_get(base, params={"productType": ptype, "page": "1"})
             data = resp.json()
             any_ok = True
             for p in data.get("products", []):
@@ -408,12 +431,13 @@ def fetch_pokecard_new_products():
 def compute_page_signature(item):
     """page_update方式: ページから再販関連の本文だけを抽出・正規化してハッシュを返す。
     広告・カウンタ等のノイズを避けるため、再販キーワードと日付を含む行に絞る。
-    返り値: (signature: str|None, ok: bool)。ok=False は取得失敗。"""
+    返り値: (signature: str|None, lines: list[str]|None, ok: bool)。ok=False は取得失敗。
+    lines は抽出行（ページ内の出現順・重複除去済み）。前回との差分を通知本文に使う。"""
     try:
         html = fetch(item["url"], config.DEFAULT_ENCODING)
     except Exception as e:
         print(f"  ⚠ 取得失敗 {item['name']}: {e}")
-        return None, False
+        return None, None, False
 
     # タグを除去してテキスト化
     text = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
@@ -455,12 +479,14 @@ def compute_page_signature(item):
     # 監視が事実上死に、将来1行拾えた瞬間に誤検知するため、判定不能(前回維持)にする(H3)。
     if not picked:
         print(f"  ⚠ 抽出0行 {item['name']}（本文を拾えず・判定不能）")
-        return None, False
+        return None, None, False
 
     # 正規化（重複除去・ソート）してハッシュ化。順序揺れに強くする。
     normalized = "\n".join(sorted(set(picked)))
     sig = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-    return sig, True
+    # 差分表示用の行リスト（出現順・重複除去・肥大防止の上限あり）
+    lines = list(dict.fromkeys(picked))[: config.PAGE_LINES_KEEP]
+    return sig, lines, True
 
 
 def load_state():
@@ -487,32 +513,34 @@ def run_discovery(prev, new_state, alerts):
     if not ok:
         new_state["discovered"] = discovered  # 取得失敗は前回維持
         print("  RSS発見器: 判定不能（前回状態を維持）")
-        return
-
-    first_run = "discovered" not in prev
-    fresh = [lk for lk in found if lk not in discovered]
-    # 発見済みに統合（上限を超えたら古いものから落とす）
-    for lk, info in found.items():
-        discovered[lk] = info
-    if len(discovered) > config.MAX_DISCOVERED_ITEMS:
-        # dictは挿入順。古い順に削る
-        for lk in list(discovered.keys())[: len(discovered) - config.MAX_DISCOVERED_ITEMS]:
-            del discovered[lk]
-    new_state["discovered"] = discovered
-
-    if first_run:
-        print(f"  RSS発見器: 初回・{len(found)}件を記録（通知なし）")
-    elif fresh:
-        names = "、".join(found[lk]["title"][:30] for lk in fresh[:5])
-        print(f"  RSS発見器: 新規{len(fresh)}件発見🔔 ← 通知（{names}）")
-        lines = [f"{found[lk]['title']} {found[lk]['link']}" for lk in fresh[:8]]
-        # 発見通知用の疑似item
-        disco_item = {"name": "新弾・再販を発見（RSS）", "url": config.FEED_URLS[0], "retail_price": 0}
-        alerts.append((disco_item, "新規発見: " + " / ".join(lines), "info"))
     else:
-        print(f"  RSS発見器: 新規なし（既知{len(discovered)}件）")
+        first_run = "discovered" not in prev
+        fresh = [lk for lk in found if lk not in discovered]
+        # 発見済みに統合（上限を超えたら古いものから落とす）
+        for lk, info in found.items():
+            discovered[lk] = info
+        if len(discovered) > config.MAX_DISCOVERED_ITEMS:
+            # dictは挿入順。古い順に削る
+            for lk in list(discovered.keys())[: len(discovered) - config.MAX_DISCOVERED_ITEMS]:
+                del discovered[lk]
+        new_state["discovered"] = discovered
 
-    # Phase2.5: 東映APIでワンピ/DBFWの新弾BOXを発見（goodsコード差分）
+        if first_run:
+            print(f"  RSS発見器: 初回・{len(found)}件を記録（通知なし）")
+        elif fresh:
+            names = "、".join(found[lk]["title"][:30] for lk in fresh[:5])
+            print(f"  RSS発見器: 新規{len(fresh)}件発見🔔 ← 通知（{names}）")
+            lines = [f"{found[lk]['title']} {found[lk]['link']}" for lk in fresh[:8]]
+            # 発見通知用の疑似item
+            disco_item = {"name": "新弾・再販を発見（RSS）", "url": config.FEED_URLS[0], "retail_price": 0}
+            alerts.append((disco_item, "新規発見: " + " / ".join(lines), "info"))
+        else:
+            print(f"  RSS発見器: 新規なし（既知{len(discovered)}件）")
+
+    # Phase2.5: 東映APIでワンピ/DBFWの新弾BOXを発見（goodsコード差分）。
+    # RSS取得の成否とは独立に必ず実行する（以前はRSS失敗時に return でスキップされ、
+    # toei_boxes が state から消える＋新弾検知が止まる不具合があった。nyuka-nowが
+    # GitHub ActionsのIPを遮断してRSSが常時失敗する環境では致命的だった）。
     boxes, ok2 = discover_toei_new_boxes()
     toei_known = dict(prev.get("toei_boxes", {}))
     if not ok2:
@@ -587,6 +615,7 @@ def run_price_screen(prev, new_state):
 
 def run_once():
     """在庫チェックを1パス実行し、在庫復活/告知更新があれば通知する。状態はファイルで永続化。"""
+    _UNREACHABLE_HOSTS.clear()  # 接続不能ホストの記録はパスごとにリセット（次パスで再挑戦）
     prev = load_state()
     new_state = {}
     alerts = []  # [(item, detail)] 通知すべき変化
@@ -629,7 +658,7 @@ def run_once():
 
         if item.get("method") == "page_update":
             # 告知ページ: 前回ハッシュと変化したら通知（初回は基準値を保存のみ）
-            sig, ok = compute_page_signature(item)
+            sig, lines, ok = compute_page_signature(item)
             time.sleep(config.REQUEST_INTERVAL)
             first_seen = key not in prev  # 初回判定はキー存在で統一(H4)
             if not ok:
@@ -638,12 +667,28 @@ def run_once():
                     new_state[key] = prev[key]
                 print(f"  {item['name']}: 判定不能（前回状態を維持）")
                 continue
-            new_state[key] = sig
+            # 状態は {"sig", "lines"}。旧形式（ハッシュ文字列のみ）からも読めるようにする。
+            prev_val = prev.get(key)
+            prev_sig = prev_val.get("sig") if isinstance(prev_val, dict) else prev_val
+            prev_lines = prev_val.get("lines") if isinstance(prev_val, dict) else None
+            new_state[key] = {"sig": sig, "lines": lines}
             if first_seen:
                 print(f"  {item['name']}: 初回・基準を記録（通知なし）")
-            elif sig != prev.get(key):
-                print(f"  {item['name']}: 告知更新を検知🔔 ← 通知")
-                alerts.append((item, "再販告知が更新されました（受付/予約/再販情報を確認）", "info"))
+            elif sig != prev_sig:
+                # 「何が変わったか」を通知に載せる（新規に現れた行＝新しい入荷/受付情報）。
+                # 従来は「更新されました」だけでページを開いて探す必要があり、精度が低かった。
+                added = []
+                if isinstance(prev_lines, list):
+                    prev_set = set(prev_lines)
+                    added = [l for l in lines if l not in prev_set]
+                if added:
+                    shown = [l[: config.DIFF_LINE_MAXLEN] for l in added[: config.DIFF_LINES_SHOWN]]
+                    more = f" …ほか{len(added) - len(shown)}行" if len(added) > len(shown) else ""
+                    detail = f"更新検知・新規{len(added)}行: " + " ／ ".join(shown) + more
+                else:
+                    detail = "再販告知が更新されました（既存行の削除/変更。リンク先で確認を）"
+                print(f"  {item['name']}: 告知更新を検知🔔 ← 通知（新規{len(added)}行）")
+                alerts.append((item, detail, "info"))
             else:
                 print(f"  {item['name']}: 更新なし")
             continue
@@ -725,16 +770,21 @@ def build_messages(alerts):
 
     has_stock = any(k == "stock" for _, _, k in norm)
     n = len(norm)
+    # 件名に先頭商品の名前を入れる（「N件」だけでは開くまで中身が分からない）。
+    # 在庫検知が混在する場合は在庫系を先頭に出す。
+    norm.sort(key=lambda a: 0 if a[2] == "stock" else 1)
+    first_name = norm[0][0]["name"][:24]
+    suffix = f" ほか{n - 1}件" if n > 1 else ""
 
     if has_stock:
         # 在庫検知が含まれる=緊急。買える可能性があるので煽り文。
-        subject = f"🤖【在庫検知】転売検証 {n}件（要・定価確認）"
+        subject = f"🤖【在庫検知】{first_name}{suffix}（要・定価確認）"
         headline = "🤖 転売検証 在庫検知！"
         note = config.NOTE  # 「数分で完売の可能性大。即購入→即売り」
         color = "#c00"
     else:
         # お知らせ系のみ(新弾・告知更新・発見)。緊急でないので穏やかに。
-        subject = f"📣【お知らせ】転売検証 新弾/再販情報 {n}件"
+        subject = f"📣【お知らせ】{first_name}{suffix}"
         headline = "📣 転売検証 新弾・再販のお知らせ"
         note = "新弾・再販・告知の更新を検知しました（在庫が買える状態とは限りません。リンク先で確認を）。"
         color = "#36c"

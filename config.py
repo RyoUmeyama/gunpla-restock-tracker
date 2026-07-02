@@ -175,13 +175,9 @@ WATCH_ITEMS = [
         "retail_price": 0,
         "key": "pokecenter_tokyodx_news",
     },
-    {
-        "name": "ポケセン メガトウキョー 店頭ニュース",
-        "method": "page_update",
-        "url": "https://shop.pokemon.co.jp/ja/shop/pokemoncenter-megatokyo/news/",
-        "retail_price": 0,
-        "key": "pokecenter_megatokyo_news",
-    },
+    # ※メガトウキョー店頭ニュース(pokemoncenter-megatokyo/news/)はJSレンダリングで
+    #   本文が取得できず常時「抽出0行・判定不能」だったため監視から除外(2026-07-02)。
+    #   トウキョーDX側は静的HTMLに見出しが出るため監視継続（販売方法告知は全店共通が多い）。
     # --- ポケカ コラボ・プロモ・グッズ 公式info一覧（ポケカ全方位）---
     {
         "name": "ポケカ公式 info一覧（コラボ/限定/プロモ）",
@@ -208,6 +204,10 @@ TOEI_INSTOCK_MEANS_NOT = "0"  # stock_status がこの値なら在庫なし
 # 「受付中/予約/抽選/先着/再販/入荷」と日付の周辺テキストを抽出対象にする。
 # ※揮発日付（○月○日更新・○時○分時点）は compute_page_signature で除外して誤検知を防ぐ。
 PAGE_UPDATE_KEYWORDS = ["受付中", "予約", "抽選", "先着", "再販", "入荷", "整理券", "販売方法", "コラボ", "限定", "プロモ", "受注"]
+# page_update の差分通知: stateに保持する抽出行の上限（肥大防止）と、通知に載せる新規行数
+PAGE_LINES_KEEP = 400    # stateに保存する行数上限
+DIFF_LINES_SHOWN = 6     # 通知本文に載せる新規行の最大数
+DIFF_LINE_MAXLEN = 70    # 1行の最大表示文字数
 
 # --- pokecard_official_list 方式（ポケカ公式API 新弾検知）の設定 ---
 # resultAPI.php の4カテゴリ。新弾は (productTitle, releaseDate) のセット差分で検知する。
@@ -226,6 +226,13 @@ FEED_URLS = [
 WATCH_KEYWORDS = [
     "ポケモンカード", "ポケカ", "ワンピースカード", "ワンピース",
     "遊戯王", "ドラゴンボール", "DBFW", "フュージョンワールド", "名探偵コナン",
+]
+# ポケカ判定語（これを含むタイトルは別格＝除外フィルタをかけず広く拾う）
+POKECA_TITLE_KEYWORDS = ["ポケモンカード", "ポケカ", "ポケモン"]
+# ポケカ以外で発見対象から外すサプライ用品・周辺グッズ（BOX転売の対象外＝通知ノイズ）
+EXCLUDE_TITLE_KEYWORDS = [
+    "スリーブ", "デッキケース", "プレイマット", "ラバーマット", "デッキシールド",
+    "カードローダー", "バインダー", "ストレイジ", "ストレージ", "サプライ",
 ]
 # 動的監視候補の上限（net利益降順で上位のみ。暴走防止）
 MAX_DISCOVERED_ITEMS = 30
