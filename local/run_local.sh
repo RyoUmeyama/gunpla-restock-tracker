@@ -25,6 +25,13 @@ set -a
 source .env
 set +a
 
+# .env が雛形のまま（プレースホルダ/空）の場合も実行を拒否する。
+# 通知できないまま在庫検知だけ進むと、その検知は二度と通知されないため。
+if [ -z "${SMTP_PASSWORD:-}" ] || printf '%s' "${SMTP_PASSWORD}" | LC_ALL=C grep -q '[^A-Za-z0-9]'; then
+  echo "[$(date '+%F %T')] .env の SMTP_PASSWORD が未記入（雛形のまま）です。実行中止。" >> local_run.log
+  exit 1
+fi
+
 export LOOP_COUNT=1   # launchd 側が10分おきに起動するのでジョブ内ループは不要
 echo "[$(date '+%F %T')] === local run ===" >> local_run.log
 .venv/bin/python check_stock.py >> local_run.log 2>&1
