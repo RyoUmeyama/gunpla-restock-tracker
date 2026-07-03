@@ -78,6 +78,50 @@ WATCH_ITEMS = [
         "retail_price": 5280,
         "key": "onepiece_op15_stock",
     },
+    # --- 楽天ブックス在庫（公式API・要RAKUTEN_APP_ID）---
+    # 楽天ブックスは定価販売の主要正規ルート。公式APIなのでブロックの心配がなく、
+    # 「定価×1.05以下の在庫あり」だけを検知する＝通知が来た時点で定価で買える可能性が高い。
+    # RAKUTEN_APP_ID（GitHub Secrets / .env）を設定すると自動で有効になる。未設定ならスキップ。
+    {
+        "name": "ポケカ MEGAドリームex BOX（楽天ブックス）",
+        "method": "rakuten_books",
+        "keyword": "ポケモンカード ハイクラスパック MEGAドリームex BOX",
+        "url": "https://books.rakuten.co.jp/",
+        "retail_price": 5500,
+        "key": "rakuten_megadream",
+    },
+    {
+        "name": "ポケカ テラスタルフェスex BOX（楽天ブックス）",
+        "method": "rakuten_books",
+        "keyword": "ポケモンカード ハイクラスパック テラスタルフェスex BOX",
+        "url": "https://books.rakuten.co.jp/",
+        "retail_price": 5500,
+        "key": "rakuten_terastal",
+    },
+    {
+        "name": "ポケカ ホワイトフレア BOX（楽天ブックス）",
+        "method": "rakuten_books",
+        "keyword": "ポケモンカード 拡張パック ホワイトフレア BOX",
+        "url": "https://books.rakuten.co.jp/",
+        "retail_price": 5800,
+        "key": "rakuten_whiteflare",
+    },
+    {
+        "name": "ポケカ ブラックボルト BOX（楽天ブックス）",
+        "method": "rakuten_books",
+        "keyword": "ポケモンカード 拡張パック ブラックボルト BOX",
+        "url": "https://books.rakuten.co.jp/",
+        "retail_price": 5800,
+        "key": "rakuten_blackbolt",
+    },
+    {
+        "name": "ワンピ OP-17 世界最強の戦士 BOX（楽天ブックス）",
+        "method": "rakuten_books",
+        "keyword": "ワンピースカードゲーム 世界最強の戦士 BOX",
+        "url": "https://books.rakuten.co.jp/",
+        "retail_price": 5280,
+        "key": "rakuten_op17",
+    },
     # --- 集約ページ更新検知（page_update・anime-matsuri）---
     # 【2026-07-03 クラウド主戦化】nyuka-nowはクラウドIPを遮断しておりGitHub Actionsから
     # 取得不能。anime-matsuriの「抽選予約・先着販売・再販入荷まとめ」ページは同種の集約情報で
@@ -281,6 +325,10 @@ EXCLUDE_TITLE_KEYWORDS = [
 ]
 # 動的監視候補の上限（net利益降順で上位のみ。暴走防止）
 MAX_DISCOVERED_ITEMS = 30
+
+# --- rakuten_books 方式（楽天市場API・楽天ブックス在庫）---
+# 公式API。1リク/秒制限（REQUEST_INTERVALで遵守）。applicationIdはSecretsのRAKUTEN_APP_ID。
+RAKUTEN_ICHIBA_API = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601"
 
 # --- Phase2.5: 東映LightningSearch APIで新弾BOXを自動発見 ---
 # ワンピ/DBFWの新弾BOXが出たら通知。商品ページは toei_stock_status で在庫監視可能。
