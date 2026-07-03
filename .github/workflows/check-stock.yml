@@ -9,9 +9,10 @@ on:
     #     → 毎時1回×1パス（サーキットブレーカー導入後は1回2〜3分）＝月約1,500〜1,900分で枠内。
     #  2) nyuka-nowはクラウドIPを遮断 → 主要銘柄はanime-matsuriの同種まとめページに移行済み。
     #     nyuka-now系はローカル実行時のみ機能するボーナス層。
-    #  3) cron間引きで毎時指定でも遅延・スキップはあり得る（:07は混雑する:00を避けるため）。
-    # ※リポジトリをpublicにすればActions分数は無料無制限になり '*/15' に上げられる。
-    - cron: '7 * * * *'
+    #  3) cron間引きで指定どおり起動しないことはあり得る前提で運用（:00台の混雑を避けたオフセット）。
+    # 【2026-07-03 public化】Actions分数が無制限になったため15分間隔×3パスに引き上げ。
+    # 1起動で約15分カバーするので、間引きで1本飛んでも隙間ができにくい。
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch: # 手動実行も可
     inputs:
       test_notify:
@@ -59,9 +60,9 @@ jobs:
           WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
           # 手動実行時に test_notify=1 を渡すと通知経路テストモードになる
           TEST_NOTIFY: ${{ github.event.inputs.test_notify }}
-          # 毎時1回×1パス（無料枠2,000分/月に収めるため。publicリポ化したら増やせる）
-          LOOP_COUNT: '1'
-          LOOP_INTERVAL: '180'
+          # 15分cron×ジョブ内3パス(4分間隔)＝1起動で約15分カバー（public化で分数無制限）
+          LOOP_COUNT: '3'
+          LOOP_INTERVAL: '240'
           # ログをリアルタイムに出す（バッファリングで実行途中の進捗が見えない問題の解消）
           PYTHONUNBUFFERED: '1'
         run: python check_stock.py
