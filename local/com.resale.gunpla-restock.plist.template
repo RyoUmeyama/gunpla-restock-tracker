@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.resale.gunpla-restock</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__REPO_DIR__/local/run_local.sh</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>600</integer><!-- 10分おき -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__REPO_DIR__/launchd_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO_DIR__/launchd_stderr.log</string>
+</dict>
+</plist>

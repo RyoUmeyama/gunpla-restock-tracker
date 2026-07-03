@@ -2,10 +2,17 @@ name: Check Gunpla Restock
 
 on:
   schedule:
-    # GitHub Actions の cron は混雑時に大幅に間引かれる（10分指定→実測2時間に1回）。
-    # 起動機会を増やすため複数の時刻を明示し、各起動でジョブ内ループ（下記 LOOP_COUNT）で
-    # 約9分間粘ることで、1起動あたりの監視カバー時間を広げる。
-    - cron: '0,15,30,45 * * * *'
+    # 【2026-07-03 クラウド主戦化】ローカルMacは平日日中しか起動しないため、Actionsを主戦に戻す。
+    # 制約と対策:
+    #  1) privateリポの無料枠は月2,000分。旧設定(1回28分×10回/日)は月初8日で枠切れになり
+    #     残り3週間全停止していた（6/30の連続failureの原因）。
+    #     → 毎時1回×1パス（サーキットブレーカー導入後は1回2〜3分）＝月約1,500〜1,900分で枠内。
+    #  2) nyuka-nowはクラウドIPを遮断 → 主要銘柄はanime-matsuriの同種まとめページに移行済み。
+    #     nyuka-now系はローカル実行時のみ機能するボーナス層。
+    #  3) cron間引きで指定どおり起動しないことはあり得る前提で運用（:00台の混雑を避けたオフセット）。
+    # 【2026-07-03 public化】Actions分数が無制限になったため15分間隔×3パスに引き上げ。
+    # 1起動で約15分カバーするので、間引きで1本飛んでも隙間ができにくい。
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch: # 手動実行も可
     inputs:
       test_notify:
@@ -20,6 +27,7 @@ concurrency:
 jobs:
   check-stock:
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # 暴走時の課金枠保護
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -52,9 +60,11 @@ jobs:
           WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
           # 手動実行時に test_notify=1 を渡すと通知経路テストモードになる
           TEST_NOTIFY: ${{ github.event.inputs.test_notify }}
-          # ジョブ内ループ: 3分おきに4回チェック=約9分粘る（間引き対策）
-          LOOP_COUNT: '4'
-          LOOP_INTERVAL: '180'
+          # 15分cron×ジョブ内3パス(4分間隔)＝1起動で約15分カバー（public化で分数無制限）
+          LOOP_COUNT: '3'
+          LOOP_INTERVAL: '240'
+          # ログをリアルタイムに出す（バッファリングで実行途中の進捗が見えない問題の解消）
+          PYTHONUNBUFFERED: '1'
         run: python check_stock.py
 
       - name: Save stock state

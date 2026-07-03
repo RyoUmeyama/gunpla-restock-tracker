@@ -3,6 +3,8 @@ __pycache__/
 .env
 .DS_Store
 *.log
+# ローカル実行用の仮想環境
+.venv/
 # 在庫状態（GitHub Actions cache で永続化するためコミット不要）
 stock_state.json
 # 検証用一時ファイル

@@ -78,7 +78,52 @@ WATCH_ITEMS = [
         "retail_price": 5280,
         "key": "onepiece_op15_stock",
     },
-    # --- 集約ページ更新検知（page_update。誤検知なし・在庫変動/再販告知を拾う）---
+    # --- 集約ページ更新検知（page_update・anime-matsuri）---
+    # 【2026-07-03 クラウド主戦化】nyuka-nowはクラウドIPを遮断しておりGitHub Actionsから
+    # 取得不能。anime-matsuriの「抽選予約・先着販売・再販入荷まとめ」ページは同種の集約情報で
+    # クラウド到達可（OP-16ページで実績済み）のため、主要銘柄はこちらを主監視にする。
+    {
+        "name": "ポケカ テラスタルフェスex 抽選/再販まとめ（anime-matsuri）",
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-terracetal-fes-ex-reservation-lottery/",
+        "retail_price": 5500,
+        "key": "pokeca_terastal_am",
+    },
+    {
+        "name": "ポケカ ホワイトフレア 抽選/再販まとめ（anime-matsuri）",
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-whiteflare-reservation-lottery-sv11w/",
+        "retail_price": 5800,
+        "key": "pokeca_whiteflare_am",
+    },
+    {
+        "name": "ポケカ ブラックボルト 抽選/再販まとめ（anime-matsuri）",
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-blackbolt-reservation-lottery-sv11b/",
+        "retail_price": 5800,
+        "key": "pokeca_blackbolt_am",
+    },
+    {
+        # ハイクラスパック（2025-11発売・プレミア持続中）。ポケカ別格方針で追加。
+        "name": "ポケカ MEGAドリームex 抽選/再販まとめ（anime-matsuri）",
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-mega-dream-ex-reservation-lottery/",
+        "retail_price": 5500,
+        "key": "pokeca_megadream_am",
+    },
+    {
+        # ワンピ最新弾（第17弾）。東映ストア掲載時は新弾発見機能が自動通知→在庫監視を追加する。
+        "name": "ワンピ OP-17 世界最強の戦士 抽選/再販まとめ（anime-matsuri）",
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/onepiececard-sekaisaikyonosenshi-op17-reservation-lottery/",
+        "retail_price": 5280,
+        "key": "onepiece_op17_am",
+    },
+    # --- 集約ページ更新検知（page_update・nyuka-now）---
+    # ⚠ nyuka-nowはクラウドIP遮断のためGitHub Actionsからは常時「判定不能」になる。
+    #   平日にローカルMacで実行したときだけ機能するボーナス層（サーキットブレーカーで
+    #   クラウド実行時のコストはほぼゼロ）。anime-matsuriに専用ページが無い銘柄
+    #   （DBFW SB01/FB10・遊戯王WPP7/RC04・コナンCT-P09）のカバーもここが担う。
     {
         "name": "DBFW CROSS FORCE FB10 再販集約",
         "method": "page_update",
@@ -175,13 +220,9 @@ WATCH_ITEMS = [
         "retail_price": 0,
         "key": "pokecenter_tokyodx_news",
     },
-    {
-        "name": "ポケセン メガトウキョー 店頭ニュース",
-        "method": "page_update",
-        "url": "https://shop.pokemon.co.jp/ja/shop/pokemoncenter-megatokyo/news/",
-        "retail_price": 0,
-        "key": "pokecenter_megatokyo_news",
-    },
+    # ※メガトウキョー店頭ニュース(pokemoncenter-megatokyo/news/)はJSレンダリングで
+    #   本文が取得できず常時「抽出0行・判定不能」だったため監視から除外(2026-07-02)。
+    #   トウキョーDX側は静的HTMLに見出しが出るため監視継続（販売方法告知は全店共通が多い）。
     # --- ポケカ コラボ・プロモ・グッズ 公式info一覧（ポケカ全方位）---
     {
         "name": "ポケカ公式 info一覧（コラボ/限定/プロモ）",
@@ -208,6 +249,10 @@ TOEI_INSTOCK_MEANS_NOT = "0"  # stock_status がこの値なら在庫なし
 # 「受付中/予約/抽選/先着/再販/入荷」と日付の周辺テキストを抽出対象にする。
 # ※揮発日付（○月○日更新・○時○分時点）は compute_page_signature で除外して誤検知を防ぐ。
 PAGE_UPDATE_KEYWORDS = ["受付中", "予約", "抽選", "先着", "再販", "入荷", "整理券", "販売方法", "コラボ", "限定", "プロモ", "受注"]
+# page_update の差分通知: stateに保持する抽出行の上限（肥大防止）と、通知に載せる新規行数
+PAGE_LINES_KEEP = 400    # stateに保存する行数上限
+DIFF_LINES_SHOWN = 6     # 通知本文に載せる新規行の最大数
+DIFF_LINE_MAXLEN = 70    # 1行の最大表示文字数
 
 # --- pokecard_official_list 方式（ポケカ公式API 新弾検知）の設定 ---
 # resultAPI.php の4カテゴリ。新弾は (productTitle, releaseDate) のセット差分で検知する。
@@ -226,6 +271,13 @@ FEED_URLS = [
 WATCH_KEYWORDS = [
     "ポケモンカード", "ポケカ", "ワンピースカード", "ワンピース",
     "遊戯王", "ドラゴンボール", "DBFW", "フュージョンワールド", "名探偵コナン",
+]
+# ポケカ判定語（これを含むタイトルは別格＝除外フィルタをかけず広く拾う）
+POKECA_TITLE_KEYWORDS = ["ポケモンカード", "ポケカ", "ポケモン"]
+# ポケカ以外で発見対象から外すサプライ用品・周辺グッズ（BOX転売の対象外＝通知ノイズ）
+EXCLUDE_TITLE_KEYWORDS = [
+    "スリーブ", "デッキケース", "プレイマット", "ラバーマット", "デッキシールド",
+    "カードローダー", "バインダー", "ストレイジ", "ストレージ", "サプライ",
 ]
 # 動的監視候補の上限（net利益降順で上位のみ。暴走防止）
 MAX_DISCOVERED_ITEMS = 30
@@ -259,8 +311,10 @@ USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
-REQUEST_TIMEOUT = 20
-REQUEST_INTERVAL = 1.5  # 商品ごとのリクエスト間隔（サイト負荷配慮）
+# (接続タイムアウト, 読み取りタイムアウト)。接続6秒で見切ることで、クラウドIPを遮断している
+# ホスト（nyuka-now等）への無駄な待ち時間を最小化しサーキットブレーカーを早く発動させる。
+REQUEST_TIMEOUT = (6, 20)
+REQUEST_INTERVAL = 1.0  # 商品ごとのリクエスト間隔（サイト負荷配慮）
 
 # 前回在庫状態の保存ファイル
 STATE_FILE = "stock_state.json"
