@@ -19,12 +19,13 @@ import time
 import hashlib
 from datetime import datetime
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 import requests
 
 import config
 from email_utils import send_email_with_retry
-from webhook_utils import send_webhook
+from webhook_utils import send_webhook, send_ntfy
 
 
 def _this_year():
@@ -660,12 +661,46 @@ def run_price_screen(prev, new_state):
     new_state["drop_counts"] = drop_counts
 
 
+def append_heartbeat(prev, new_state, alerts, health):
+    """日次ヘルスレポート: JST9時以降の最初のパスで、Bot生存＋監視状態サマリを1通送る。
+    「沈黙が『検知なし』なのか『Bot停止』なのか分からない」問題への対策
+    （過去にActions枠切れで3週間気づかず停止していた教訓）。"""
+    now_jst = datetime.now(ZoneInfo("Asia/Tokyo"))
+    today = now_jst.strftime("%Y-%m-%d")
+    new_state["last_heartbeat"] = prev.get("last_heartbeat")
+    if now_jst.hour < 9 or prev.get("last_heartbeat") == today:
+        return
+    new_state["last_heartbeat"] = today
+    ok_n = len(health["ok"])
+    # 想定内の取得不能: nyuka-now系（クラウドIP遮断）と、RAKUTEN_APP_ID未設定時の楽天監視。
+    # それ以外の取得不能は故障の可能性があるので「要確認」として名前を出す。
+    no_rakuten_id = not os.environ.get("RAKUTEN_APP_ID")
+    def _is_expected(u):
+        return ("nyuka-now" in u) or (no_rakuten_id and "rakuten" in u)
+    expected = [n for n, u in health["fail"] if _is_expected(u)]
+    unexpected = [n for n, u in health["fail"] if not _is_expected(u)]
+    lines = [f"監視{ok_n + len(health['fail'])}件: 正常{ok_n}件"]
+    if expected:
+        lines.append(f"想定内の取得不能{len(expected)}件（nyuka-now系/楽天API未設定）")
+    if unexpected:
+        lines.append(f"⚠要確認の取得不能{len(unexpected)}件: " + "、".join(unexpected[:6]))
+    lines.append("このレポートが毎朝届いていればBotは正常稼働しています。")
+    hb_item = {
+        "name": "📊 日次ヘルスレポート（Bot生存確認）",
+        "url": "https://github.com/RyoUmeyama/gunpla-restock-tracker/actions",
+        "retail_price": 0,
+    }
+    print("  📊 日次ヘルスレポートを送信")
+    alerts.append((hb_item, " ／ ".join(lines), "info"))
+
+
 def run_once():
     """在庫チェックを1パス実行し、在庫復活/告知更新があれば通知する。状態はファイルで永続化。"""
     _UNREACHABLE_HOSTS.clear()  # 接続不能ホストの記録はパスごとにリセット（次パスで再挑戦）
     prev = load_state()
     new_state = {}
     alerts = []  # [(item, detail)] 通知すべき変化
+    health = {"ok": [], "fail": []}  # 日次ヘルスレポート用。fail は (name, url) のリスト
 
     # Phase2: RSS発見器で新弾・再販を自動キャッチ（固定リストを動的に補完）
     run_discovery(prev, new_state, alerts)
@@ -682,8 +717,10 @@ def run_once():
             products, ok = fetch_pokecard_new_products()
             if not ok:
                 new_state[key] = prev.get(key, [])
+                health["fail"].append((item["name"], item.get("url", "")))
                 print(f"  {item['name']}: 判定不能（前回状態を維持）")
                 continue
+            health["ok"].append(item["name"])
             cur_keys = sorted(products.keys())
             new_state[key] = cur_keys
             prev_keys = prev.get(key, None)
@@ -712,8 +749,10 @@ def run_once():
                 # 取得失敗: 前回値があれば維持、無ければキー未設定のまま(次回も初回扱い)
                 if key in prev:
                     new_state[key] = prev[key]
+                health["fail"].append((item["name"], item.get("url", "")))
                 print(f"  {item['name']}: 判定不能（前回状態を維持）")
                 continue
+            health["ok"].append(item["name"])
             # 状態は {"sig", "lines"}。旧形式（ハッシュ文字列のみ）からも読めるようにする。
             prev_val = prev.get(key)
             prev_sig = prev_val.get("sig") if isinstance(prev_val, dict) else prev_val
@@ -745,9 +784,11 @@ def run_once():
         time.sleep(config.REQUEST_INTERVAL)
         if not ok:
             new_state[key] = prev.get(key, False)  # 取得失敗は前回維持（誤通知防止）
+            health["fail"].append((item["name"], item.get("url", "")))
             print(f"  {item['name']}: 判定不能（前回状態を維持）")
             continue
 
+        health["ok"].append(item["name"])
         new_state[key] = in_stock
         first_seen = key not in prev  # 初回は通知抑制（基準記録のみ）
         was = prev.get(key, False)
@@ -761,6 +802,9 @@ def run_once():
             alerts.append((item, detail, "stock"))  # 在庫検知=緊急(買える)
         detail_note = f" [{detail}]" if detail else ""
         print(f"  {item['name']}: {status}{detail_note}{change}")
+
+    # 日次ヘルスレポート（JST9時以降の最初のパスで1通・生存確認）
+    append_heartbeat(prev, new_state, alerts, health)
 
     save_state(new_state)
 
@@ -865,10 +909,13 @@ def build_messages(alerts):
 
 def notify(restocked):
     subject, text, html, web_title, web_lines = build_messages(restocked)
+    # 在庫検知（緊急・買える）が含まれるか。ntfyの優先度に使う。
+    urgent = any((len(a) < 3) or (a[2] == "stock") for a in restocked)
     mail_ok = _notify_email(subject, text, html)
     hook_ok = _notify_webhook(web_title, web_lines)
-    if not mail_ok and not hook_ok:
-        print("✗ メール・Webhookとも通知できませんでした")
+    ntfy_ok = send_ntfy(os.environ.get("NTFY_TOPIC"), web_title, web_lines, urgent=urgent)
+    if not mail_ok and not hook_ok and not ntfy_ok:
+        print("✗ メール・Webhook・ntfyのいずれも通知できませんでした")
         sys.exit(1)
 
 
