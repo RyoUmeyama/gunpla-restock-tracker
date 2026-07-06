@@ -1,0 +1,21 @@
+name: Unit Tests
+
+# 純粋ロジックの単体テスト（ネットワークアクセスなし・30秒程度）。
+# push/PRごとに回して、通知ロジックの退行を検知する。
+on:
+  push:
+    paths: ['**.py']
+  pull_request:
+    paths: ['**.py']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -v

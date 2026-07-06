@@ -13,6 +13,7 @@ Webhook通知ユーティリティ（Discord / Slack 両対応）
 """
 
 import json
+import time
 
 import requests
 
@@ -38,12 +39,42 @@ def send_webhook(webhook_url, title, lines, timeout=15):
     body = title + "\n" + "\n".join(lines)
 
     if _is_discord(webhook_url):
-        # Discordは2000文字制限。content にまとめて送る。
-        payload = {"content": body[:1900]}
-    else:
-        # Slack（および互換）
-        payload = {"text": body}
+        # Discordは2000文字制限。差分つき通知で本文が伸びると従来は1900字で
+        # ぶった切られていた（URL途中欠け）ため、行境界で分割して複数メッセージで送る。
+        chunks = _split_chunks(body, 1900, max_chunks=3)
+        ok = False
+        for i, chunk in enumerate(chunks):
+            if i > 0:
+                time.sleep(0.5)  # Discordのレート制限(5req/2s)に配慮
+            sent = _post(webhook_url, {"content": chunk}, timeout)
+            ok = ok or sent
+        return ok
+    # Slack（および互換）
+    return _post(webhook_url, {"text": body}, timeout)
 
+
+def _split_chunks(body, limit, max_chunks=3):
+    """本文を行境界で limit 文字以内のチャンクに分割する。1行が limit を超える場合は行内で切る。
+    max_chunks を超える分は末尾を省略する（通知の洪水防止）。"""
+    chunks, cur = [], ""
+    for line in body.split("\n"):
+        while len(line) > limit:  # 超長行は行内で分割
+            chunks.append(line[:limit])
+            line = line[limit:]
+        if len(cur) + len(line) + 1 > limit:
+            chunks.append(cur)
+            cur = line
+        else:
+            cur = line if not cur else cur + "\n" + line
+    if cur:
+        chunks.append(cur)
+    if len(chunks) > max_chunks:
+        chunks = chunks[:max_chunks]
+        chunks[-1] = chunks[-1][: limit - 20] + "\n…（以下省略）"
+    return chunks
+
+
+def _post(webhook_url, payload, timeout):
     try:
         resp = requests.post(
             webhook_url,

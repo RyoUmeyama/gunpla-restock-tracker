@@ -27,7 +27,7 @@ concurrency:
 jobs:
   check-stock:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # 暴走時の課金枠保護
+    timeout-minutes: 90  # ジョブ内ループ(約60分)＋余裕。暴走時の保護
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -62,9 +62,13 @@ jobs:
           RAKUTEN_APP_ID: ${{ secrets.RAKUTEN_APP_ID }}
           # 手動実行時に test_notify=1 を渡すと通知経路テストモードになる
           TEST_NOTIFY: ${{ github.event.inputs.test_notify }}
-          # 15分cron×ジョブ内3パス(4分間隔)＝1起動で約15分カバー（public化で分数無制限）
-          LOOP_COUNT: '3'
-          LOOP_INTERVAL: '240'
+          # 【2026-07-06 カバレッジ拡大】cronは15分指定でも実測60〜90分間隔（深夜は最大4.5時間）
+          # に間引かれると週末の実測で判明。1起動を約60分粘る設計にして間引きの隙間を埋める:
+          # 8パス×7分間隔≈1時間。concurrencyグループで同時実行は防がれ、待機中のcronが
+          # 前ジョブ終了直後に連結して起動する＝ほぼ連続カバー。
+          # 監視先への負荷は1ページあたり7〜8分に1回（一般的な在庫監視サービスと同等）。
+          LOOP_COUNT: '8'
+          LOOP_INTERVAL: '420'
           # ログをリアルタイムに出す（バッファリングで実行途中の進捗が見えない問題の解消）
           PYTHONUNBUFFERED: '1'
         run: python check_stock.py
