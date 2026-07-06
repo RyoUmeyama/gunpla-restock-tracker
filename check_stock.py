@@ -77,6 +77,8 @@ def check_item(item):
         return _check_suruga_soldout_text(item)
     if method == "cart_button":
         return _check_cart_button(item)
+    if method == "rakuten_books":
+        return _check_rakuten_books(item)
     print(f"  ⚠ 未知のmethod {method}（{item['name']}）")
     return False, False, ""
 
@@ -207,6 +209,51 @@ def _check_cart_button(item):
     has_cart = ("カートに入れる" in scope) or ("カートに追加" in scope) or ("cartinput" in scope)
     in_stock = has_cart and not sold
     return in_stock, True, f"cart_button(cart={has_cart},sold={sold})"
+
+
+def _check_rakuten_books(item):
+    """楽天市場API(IchibaItem/Search)で楽天ブックス(shopCode=book)の在庫を判定する。
+    楽天ブックスは定価販売の主要正規ルート。availability=1(在庫あり)で検索し、
+    定価近傍(定価×1.05以下)のヒットがあれば「定価で買える在庫あり」とする。
+    ※転売価格の出品はshopCode=bookに存在しないが、セット品/カートン誤ヒットは価格上限で弾く。
+    環境変数 RAKUTEN_APP_ID 未設定時は判定不能(スキップ)扱い。"""
+    app_id = os.environ.get("RAKUTEN_APP_ID")
+    if not app_id:
+        print(f"  （RAKUTEN_APP_ID未設定・スキップ {item['name']}）")
+        return False, False, ""
+    try:
+        resp = http_get(
+            config.RAKUTEN_ICHIBA_API,
+            params={
+                "applicationId": app_id,
+                "keyword": item["keyword"],
+                "shopCode": "book",   # 楽天ブックス（定価販売の直営店舗）
+                "availability": "1",  # 在庫ありのみ
+                "hits": "10",
+                "format": "json",
+            },
+        )
+        data = resp.json()
+    except Exception as e:
+        print(f"  ⚠ 楽天API取得失敗 {item['name']}: {e}")
+        return False, False, ""
+
+    retail = item.get("retail_price", 0)
+    limit = int(retail * 1.05) if retail else None
+    hits = []
+    for wrap in data.get("Items", []):
+        it = wrap.get("Item", wrap) if isinstance(wrap, dict) else {}
+        price = it.get("itemPrice")
+        if not isinstance(price, int):
+            continue
+        if limit and price > limit:
+            continue  # セット品・カートン等の誤ヒットを価格上限で除外
+        hits.append((price, (it.get("itemName") or "")[:40], it.get("itemUrl") or ""))
+    if not hits:
+        return False, True, "楽天ブックス在庫なし(定価近傍)"
+    hits.sort()
+    price, name, url = hits[0]
+    return True, True, f"楽天ブックス {price:,}円 {name} {url}"
 
 
 def fetch_altema_box_prices():

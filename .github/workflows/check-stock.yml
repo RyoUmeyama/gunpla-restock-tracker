@@ -58,6 +58,8 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
           WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          # 楽天市場API（未設定なら楽天ブックス監視は自動スキップ）
+          RAKUTEN_APP_ID: ${{ secrets.RAKUTEN_APP_ID }}
           # 手動実行時に test_notify=1 を渡すと通知経路テストモードになる
           TEST_NOTIFY: ${{ github.event.inputs.test_notify }}
           # 15分cron×ジョブ内3パス(4分間隔)＝1起動で約15分カバー（public化で分数無制限）
