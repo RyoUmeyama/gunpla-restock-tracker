@@ -612,10 +612,32 @@ def run_discovery(prev, new_state, alerts):
     else:
         print(f"  東映新弾発見: 新弾なし（{len(boxes)}BOX）")
 
+    # 【在庫スイープ】新弾発見用に取得済みの全BOXの stockMsg を前回と比較し、
+    # 「×(在庫なし)」から変化したBOXを在庫復活として通知する。追加リクエストゼロで
+    # 東映ストアの全カタログ(約31BOX)をカバーできる。個別ページ監視(toei_stock_status)は
+    # 高優先5商品の鮮度用に併存（検索APIはCDNキャッシュで数分遅れる可能性があるため）。
+    if not first_toei:
+        restocked = [
+            b for g, b in boxes.items()
+            if (toei_known.get(g) or {}).get("stockMsg") == "×"
+            and (b.get("stockMsg") or "×") != "×"
+        ]
+        if restocked:
+            names = "、".join(b["name"][:30] for b in restocked[:5])
+            print(f"  東映在庫スイープ: {len(restocked)}件が×から変化🔔 ← 通知（{names}）")
+            for b in restocked[:5]:
+                sweep_item = {
+                    "name": f"{b['name'][:44]}（東映ストア）",
+                    "url": b["url"],
+                    "retail_price": b.get("price", 0),
+                }
+                alerts.append((sweep_item, f"在庫表示が「×」→「{b.get('stockMsg', '')}」に変化", "stock"))
+
 
 def run_price_screen(prev, new_state):
-    """Phase3(ログ通知モード): altema相場で監視itemの利益判定をログ表示する。
-    自動除外はまだ行わず、dropped連続回数だけ state に蓄積（将来の自動除外の地ならし）。"""
+    """Phase3: altema/price-base相場で監視itemの利益判定を行い、dropped連続回数をstateに蓄積する。
+    AUTO_DROP_ENABLED時はDROP_CONFIRM_COUNT回連続droppedの銘柄が監視スキップされる(run_once)。
+    除外中も本関数の相場評価は毎回走るので、相場回復でカウントが0に戻れば自動復帰する。"""
     prices, ok = fetch_altema_box_prices()
     time.sleep(config.REQUEST_INTERVAL)
     drop_counts = dict(prev.get("drop_counts", {}))
@@ -624,7 +646,8 @@ def run_price_screen(prev, new_state):
         print("  相場選別: 判定不能（altema取得失敗・前回維持）")
         return
 
-    print("  --- 相場選別（ログのみ・自動除外なし）---")
+    mode = "自動除外あり" if config.AUTO_DROP_ENABLED else "ログのみ"
+    print(f"  --- 相場選別（{mode}）---")
     for item in config.WATCH_ITEMS:
         retail = item.get("retail_price", 0)
         if not retail:
@@ -705,12 +728,21 @@ def run_once():
     # Phase2: RSS発見器で新弾・再販を自動キャッチ（固定リストを動的に補完）
     run_discovery(prev, new_state, alerts)
 
-    # Phase3: 相場選別（ログ通知モード）。価値が落ちた銘柄をログ表示するが自動除外はまだしない。
+    # Phase3: 相場選別。定価割れが連続確定した銘柄は AUTO_DROP_ENABLED 時に監視スキップする。
     if config.PRICE_SCREEN_ENABLED:
         run_price_screen(prev, new_state)
+    drop_counts = prev.get("drop_counts", {})
 
     for item in config.WATCH_ITEMS:
         key = item["key"]
+
+        # Phase3自動除外: 相場選別で「定価割れ」が連続確定した銘柄はチェック自体をスキップ。
+        # 状態は維持する（相場が回復して除外解除されたとき、誤った復活通知を出さないため）。
+        if config.AUTO_DROP_ENABLED and drop_counts.get(key, 0) >= config.DROP_CONFIRM_COUNT:
+            if key in prev:
+                new_state[key] = prev[key]
+            print(f"  {item['name']}: 相場選別により除外中（定価割れ連続{drop_counts[key]}回）")
+            continue
 
         if item.get("method") == "pokecard_official_list":
             # ポケカ公式API: (title,releaseDate)セット差分で新商品を検知（初回は基準記録）
@@ -779,7 +811,7 @@ def run_once():
                 print(f"  {item['name']}: 更新なし")
             continue
 
-        # 在庫系（gdb_soldout / toei_stock_status）
+        # 在庫系（gdb_soldout / toei_stock_status / rakuten_books）
         in_stock, ok, detail = check_item(item)
         time.sleep(config.REQUEST_INTERVAL)
         if not ok:
@@ -789,6 +821,37 @@ def run_once():
             continue
 
         health["ok"].append(item["name"])
+
+        if item.get("method") == "gdb_soldout":
+            # 店舗単位の遷移検知: 「新たに在庫ありになった店」が現れたら通知する。
+            # 全体boolだけの判定では、Amazon(転売価格の場合あり)が在庫あり続けると状態が
+            # trueに張り付き、ヨドバシ等の定価店の復活を見逃す盲点があった。
+            # detail は _check_gdb_soldout が生成する在庫あり店名の ", " 連結。
+            # 大文字小文字の表記ゆれで「新規店舗」と誤判定しないよう小文字に正規化。
+            shops = [s.lower() for s in detail.split(", ") if s] if detail else []
+            prev_val = prev.get(key)
+            prev_shops = prev_val.get("shops") if isinstance(prev_val, dict) else None
+            new_state[key] = {"in_stock": in_stock, "shops": shops}
+            status = "在庫あり🟢" if in_stock else "在庫なし🔴"
+            if key not in prev:
+                print(f"  {item['name']}: {status} [{detail}]  （初回・基準を記録）")
+            elif prev_shops is None:
+                # 旧形式(bool)からの移行: 前回Falseなら従来どおり復活通知、Trueなら基準更新のみ
+                if in_stock and not bool(prev_val):
+                    print(f"  {item['name']}: {status} [{detail}]  ← 復活！")
+                    alerts.append((item, detail, "stock"))
+                else:
+                    print(f"  {item['name']}: {status} [{detail}]  （店舗別基準に移行）")
+            else:
+                new_shops = [s for s in shops if s not in set(prev_shops)]
+                if new_shops:
+                    d = f"新たに在庫あり: {', '.join(new_shops)}（在庫あり全店: {detail}）"
+                    print(f"  {item['name']}: {status}  ← 新規店舗で復活！（{', '.join(new_shops)}）")
+                    alerts.append((item, d, "stock"))
+                else:
+                    print(f"  {item['name']}: {status} [{detail}]")
+            continue
+
         new_state[key] = in_stock
         first_seen = key not in prev  # 初回は通知抑制（基準記録のみ）
         was = prev.get(key, False)
