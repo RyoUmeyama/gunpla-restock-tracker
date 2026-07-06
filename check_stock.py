@@ -25,7 +25,7 @@ import requests
 
 import config
 from email_utils import send_email_with_retry
-from webhook_utils import send_webhook, send_ntfy
+from webhook_utils import send_webhook
 
 
 def _this_year():
@@ -909,13 +909,10 @@ def build_messages(alerts):
 
 def notify(restocked):
     subject, text, html, web_title, web_lines = build_messages(restocked)
-    # 在庫検知（緊急・買える）が含まれるか。ntfyの優先度に使う。
-    urgent = any((len(a) < 3) or (a[2] == "stock") for a in restocked)
     mail_ok = _notify_email(subject, text, html)
     hook_ok = _notify_webhook(web_title, web_lines)
-    ntfy_ok = send_ntfy(os.environ.get("NTFY_TOPIC"), web_title, web_lines, urgent=urgent)
-    if not mail_ok and not hook_ok and not ntfy_ok:
-        print("✗ メール・Webhook・ntfyのいずれも通知できませんでした")
+    if not mail_ok and not hook_ok:
+        print("✗ メール・Webhookとも通知できませんでした")
         sys.exit(1)
 
 
