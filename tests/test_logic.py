@@ -150,5 +150,93 @@ class TestSplitChunks(unittest.TestCase):
         self.assertTrue(all(len(c) <= 1900 for c in chunks))
 
 
+class TestUpcomingDates(unittest.TestCase):
+    """応募チャンス抽出の日付解決: 年なし日付の年跨ぎと各形式。"""
+
+    def test_same_year(self):
+        from datetime import date
+        today = date(2026, 7, 7)
+        self.assertIn(date(2026, 7, 15), cs._upcoming_dates("7月15日 抽選受付", today))
+
+    def test_year_rollover(self):
+        # 12月に見た「1月10日」は来年と解釈する
+        from datetime import date
+        today = date(2026, 12, 20)
+        self.assertIn(date(2027, 1, 10), cs._upcoming_dates("1月10日まで受付", today))
+
+    def test_recent_past_stays_this_year(self):
+        from datetime import date
+        today = date(2026, 7, 7)
+        self.assertIn(date(2026, 7, 1), cs._upcoming_dates("7月1日から", today))
+
+    def test_slash_format(self):
+        from datetime import date
+        today = date(2026, 7, 7)
+        self.assertIn(date(2026, 8, 1), cs._upcoming_dates("2026/8/1 10:00〜", today))
+
+    def test_invalid_date_ignored(self):
+        from datetime import date
+        self.assertEqual(cs._upcoming_dates("13月40日", date(2026, 7, 7)), [])
+
+
+class TestExtractOpportunities(unittest.TestCase):
+    """応募/予約チャンスダイジェスト: 未来日付つきの抽選行のみ拾う。"""
+
+    def _state(self, lines):
+        item = next(it for it in cs.config.WATCH_ITEMS
+                    if it["method"] == "page_update" and "anime-matsuri" in it["url"])
+        return item, {item["key"]: {"sig": "x", "lines": lines}}
+
+    def test_future_lottery_line_included(self):
+        from datetime import date
+        today = date(2026, 7, 7)
+        item, st = self._state(["【ヨドバシ】7月14日まで抽選受付中", "ただの本文"])
+        opps = cs.extract_opportunities({}, st, today)
+        self.assertEqual(len(opps), 1)
+        self.assertIn("ヨドバシ", opps[0])
+
+    def test_past_lottery_excluded(self):
+        from datetime import date
+        today = date(2026, 7, 7)
+        item, st = self._state(["【ビックカメラ】5月10日まで抽選受付", "6月1日 応募終了"])
+        self.assertEqual(cs.extract_opportunities({}, st, today), [])
+
+    def test_no_keyword_excluded(self):
+        from datetime import date
+        today = date(2026, 7, 7)
+        item, st = self._state(["7月20日 発売のカードリスト"])
+        self.assertEqual(cs.extract_opportunities({}, st, today), [])
+
+    def test_open_now_marker_without_date(self):
+        # Amazon招待リクエスト等は日付なしでも「今応募できる」ので拾う
+        from datetime import date
+        today = date(2026, 7, 7)
+        item, st = self._state(["2026年6月中旬頃から抽選予約開始Amazonで招待リクエスト(抽選)予約受付開始"])
+        opps = cs.extract_opportunities({}, st, today)
+        self.assertEqual(len(opps), 1)
+
+    def test_stale_year_open_marker_excluded(self):
+        # 過去の年に言及する「受付開始」履歴行は古いので拾わない
+        from datetime import date
+        today = date(2026, 7, 7)
+        item, st = self._state(["2025年1月初旬頃から抽選予約開始Amazonで招待リクエスト(抽選)予約受付開始"])
+        self.assertEqual(cs.extract_opportunities({}, st, today), [])
+
+    def test_boilerplate_excluded(self):
+        from datetime import date
+        today = date(2026, 7, 7)
+        item, st = self._state(["抽選応募や予約受付中・受付予定のストア一覧や応募条件等（7月20日）"])
+        self.assertEqual(cs.extract_opportunities({}, st, today), [])
+
+    def test_date_in_next_line(self):
+        # 期間がテーブルの隣セル（次の行）にある構造でも拾う
+        from datetime import date
+        today = date(2026, 7, 7)
+        item, st = self._state(["【ヨドバシ】抽選販売応募", "7月8日〜7月14日"])
+        opps = cs.extract_opportunities({}, st, today)
+        self.assertEqual(len(opps), 1)
+        self.assertIn("7月8日", opps[0])
+
+
 if __name__ == "__main__":
     unittest.main()
