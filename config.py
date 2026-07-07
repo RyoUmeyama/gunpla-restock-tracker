@@ -122,6 +122,54 @@ WATCH_ITEMS = [
         "retail_price": 5280,
         "key": "rakuten_op17",
     },
+    {
+        "name": "ポケカ ストームエメラルダ BOX（楽天ブックス）",
+        "method": "rakuten_books",
+        "keyword": "ポケモンカード 拡張パック ストームエメラルダ BOX",
+        "url": "https://books.rakuten.co.jp/",
+        "retail_price": 6000,
+        "key": "rakuten_stormemerald",
+    },
+    {
+        "name": "ポケカ アビスアイ BOX（楽天ブックス）",
+        "method": "rakuten_books",
+        "keyword": "ポケモンカード 拡張パック アビスアイ BOX",
+        "url": "https://books.rakuten.co.jp/",
+        "retail_price": 6000,
+        "key": "rakuten_abysseye",
+    },
+    {
+        "name": "ポケカ ロケット団の栄光 BOX（楽天ブックス）",
+        "method": "rakuten_books",
+        "keyword": "ポケモンカード 拡張パック ロケット団の栄光 BOX",
+        "url": "https://books.rakuten.co.jp/",
+        "retail_price": 5400,
+        "key": "rakuten_rocket",
+    },
+    {
+        "name": "ポケカ 超電ブレイカー BOX（楽天ブックス）",
+        "method": "rakuten_books",
+        "keyword": "ポケモンカード 拡張パック 超電ブレイカー BOX",
+        "url": "https://books.rakuten.co.jp/",
+        "retail_price": 5400,
+        "key": "rakuten_tyoden",
+    },
+    {
+        "name": "ポケカ インフェルノX BOX（楽天ブックス）",
+        "method": "rakuten_books",
+        "keyword": "ポケモンカード 拡張パック インフェルノX BOX",
+        "url": "https://books.rakuten.co.jp/",
+        "retail_price": 5400,
+        "key": "rakuten_inferno",
+    },
+    {
+        "name": "ポケカ 熱風のアリーナ BOX（楽天ブックス）",
+        "method": "rakuten_books",
+        "keyword": "ポケモンカード 強化拡張パック 熱風のアリーナ BOX",
+        "url": "https://books.rakuten.co.jp/",
+        "retail_price": 5400,
+        "key": "rakuten_neppu",
+    },
     # --- 集約ページ更新検知（page_update・anime-matsuri）---
     # 【2026-07-03 クラウド主戦化】nyuka-nowはクラウドIPを遮断しておりGitHub Actionsから
     # 取得不能。anime-matsuriの「抽選予約・先着販売・再販入荷まとめ」ページは同種の集約情報で
@@ -162,6 +210,84 @@ WATCH_ITEMS = [
         "url": "https://anime-matsuri.com/onepiececard-sekaisaikyonosenshi-op17-reservation-lottery/",
         "retail_price": 5280,
         "key": "onepiece_op17_am",
+    },
+    # --- 2026-07-07 相場データ駆動の監視拡大 ---
+    # altema買取相場で「買取が定価の1.3〜5.2倍」の現行弾が9銘柄未監視だったため一括追加。
+    # いずれもanime-matsuriの抽選/再販まとめページ（クラウド到達可・差分つき通知）。
+    # 定価はポケカ公式APIのパック単価×BOX入数から算出。
+    {
+        "name": "ポケカ アビスアイ 抽選/再販まとめ（anime-matsuri）",  # 買取14,000/定価6,000。docs/16の現在の本命
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-abyss-eye-reservation-lottery/",
+        "retail_price": 6000,
+        "key": "pokeca_abysseye_am",
+    },
+    {
+        "name": "ポケカ 超電ブレイカー 抽選/再販まとめ（anime-matsuri）",  # 買取28,000/定価5,400=5.2倍
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-tyodenbraker-reservation-lottery/",
+        "retail_price": 5400,
+        "key": "pokeca_tyoden_am",
+    },
+    {
+        "name": "ポケカ ロケット団の栄光 抽選/再販まとめ（anime-matsuri）",  # 買取22,000/定価5,400
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-rokettodan-no-eiko-reservation-lottery/",
+        "retail_price": 5400,
+        "key": "pokeca_rocket_am",
+    },
+    {
+        "name": "ポケカ 熱風のアリーナ 抽選/再販まとめ（anime-matsuri）",  # 買取18,000/定価5,400
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-neppunoarina-enhancement-reservation-lottery/",
+        "retail_price": 5400,
+        "key": "pokeca_neppu_am",
+    },
+    {
+        "name": "ポケカ インフェルノX 抽選/再販まとめ（anime-matsuri）",  # 買取17,000/定価5,400
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-infernox-enhancement-reservation-lottery/",
+        "retail_price": 5400,
+        "key": "pokeca_inferno_am",
+    },
+    {
+        "name": "ポケカ ニンジャスピナー 抽選/再販まとめ（anime-matsuri）",  # 買取9,500/定価5,400
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-ninja-spinner-m4-reservation-lottery/",
+        "retail_price": 5400,
+        "key": "pokeca_ninja_am",
+    },
+    {
+        "name": "ポケカ ムニキスゼロ 抽選/再販まとめ（anime-matsuri）",  # 買取7,000/定価5,400
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-munikisuzero-reservation-lottery/",
+        "retail_price": 5400,
+        "key": "pokeca_munikisu_am",
+    },
+    {
+        "name": "ポケカ バトルパートナーズ 抽選/再販まとめ（anime-matsuri）",  # 買取9,000/定価5,400
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-battle-partners-reservation-lottery/",
+        "retail_price": 5400,
+        "key": "pokeca_batpart_am",
+    },
+    {
+        # 【最優先】2026-07-31発売の最新拡張パック。予約・抽選戦線が今まさに進行中で、
+        # 「入手機会が今ある」度が最も高い。発売前後の抽選/先着/再販を全部拾う。
+        "name": "ポケカ ストームエメラルダ 抽選/予約まとめ（anime-matsuri）",
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-mega-storm-emerald-reservation-lottery/",
+        "retail_price": 6000,
+        "key": "pokeca_stormemerald_am",
+    },
+    {
+        # 30周年記念（2026-09/10発売）。予約・抽選戦線が進行中の最重要新弾。
+        # FUTURISTIC BOX(定価27,500)等の高額セットも同ページで拾う。
+        "name": "ポケカ 30th CELEBRATION 抽選/予約まとめ（anime-matsuri）",
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-mega-30th-celebration-card-set-reservation-lottery/",
+        "retail_price": 10800,
+        "key": "pokeca_30th_am",
     },
     # --- 集約ページ更新検知（page_update・nyuka-now）---
     # ⚠ nyuka-nowはクラウドIP遮断のためGitHub Actionsからは常時「判定不能」になる。
@@ -351,6 +477,22 @@ DROP_CONFIRM_COUNT = 2     # 連続でこの回数 dropped 判定が続いたら
 # drop_counts がリセットされて監視に自動復帰する。
 PRICE_SCREEN_ENABLED = True   # 相場選別の判定をログ表示する
 AUTO_DROP_ENABLED = True      # dropped 確定銘柄（定価割れ連続DROP_CONFIRM_COUNT回）を監視スキップ
+
+# --- 応募/予約チャンス・ダイジェスト（日次ヘルスレポートに同梱）---
+# 監視中のanime-matsuriまとめページから「近い将来の日付を含む抽選/予約/受付の行」を抽出し、
+# 毎朝のヘルスレポートと一緒に届ける。再販の瞬間を待つだけでなく、
+# 「今日応募できる抽選」を毎日提示して購入機会を能動的に作る。
+OPPORTUNITY_KEYWORDS = ["抽選", "予約", "受付", "応募", "先着"]
+OPPORTUNITY_WINDOW_DAYS = 45   # 今日からこの日数以内の日付を含む行を「チャンス」とみなす
+DIGEST_MAX_LINES = 12          # ダイジェストに載せる最大行数
+# 記事紹介文（関連記事ブロック）をチャンスから除外するマーカー。
+# anime-matsuriの全ページに載る「〜収録カードリストや当たりカードの…」系の定型文対策。
+DIGEST_EXCLUDE_MARKERS = ["収録カードリスト", "当たりカード", "買取価格", "封入確率", "カードリスト",
+                          "ストア一覧", "随時更新中", "情報まとめ", "速報をお届け", "コチラ"]
+DIGEST_LINE_MAXLEN = 90        # これより長い行は記事紹介文の可能性が高いので除外
+DIGEST_LINE_MINLEN = 8         # 短すぎる断片行（テーブルセル由来）は除外
+# 日付がなくても「今応募できる」ことを示すマーカー（Amazon招待リクエスト抽選等）
+DIGEST_OPEN_MARKERS = ["受付中", "招待リクエスト", "応募受付", "エントリー受付"]
 
 # 既定の文字コード（明示しないサイト用）
 DEFAULT_ENCODING = "utf-8"

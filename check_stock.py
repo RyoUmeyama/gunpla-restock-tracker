@@ -684,6 +684,87 @@ def run_price_screen(prev, new_state):
     new_state["drop_counts"] = drop_counts
 
 
+def _upcoming_dates(text, today):
+    """テキスト中の日付(202X年M月D日 / M月D日 / 202X/M/D / 202X.M.D)を解決して返す。
+    年つき日付はその年で確定。年なしのM月D日は「今日から180日以上過去なら来年」と
+    解釈する（年跨ぎ対応）。年つき部分を除外してから年なしを探す
+    （「2024年7月19日」の「7月19日」を今年と誤解釈しないため）。"""
+    from datetime import date
+    found = []
+    for y, m, d in re.findall(r"(20\d\d)年\s*(\d{1,2})月\s*(\d{1,2})日", text):
+        try:
+            found.append(date(int(y), int(m), int(d)))
+        except ValueError:
+            continue
+    stripped = re.sub(r"20\d\d年\s*\d{1,2}月\s*\d{1,2}日", "", text)
+    for m, d in re.findall(r"(\d{1,2})月\s*(\d{1,2})日", stripped):
+        try:
+            dt = date(today.year, int(m), int(d))
+        except ValueError:
+            continue
+        if (today - dt).days > 180:
+            dt = date(today.year + 1, int(m), int(d))
+        found.append(dt)
+    for y, m, d in re.findall(r"(202\d)[/.](\d{1,2})[/.](\d{1,2})", text):
+        try:
+            found.append(date(int(y), int(m), int(d)))
+        except ValueError:
+            continue
+    return found
+
+
+def extract_opportunities(prev, new_state, today):
+    """監視中のanime-matsuriまとめページの抽出行から「応募/予約チャンス」を集める。
+    条件: 抽選/予約/受付/応募/先着 のいずれかを含み、かつ今日〜OPPORTUNITY_WINDOW_DAYS日
+    以内の日付を含む行（過去の抽選履歴の行を日付で除外する）。
+    返り値: ["[商品名] 行テキスト", ...]（重複除去・上限あり）。"""
+    out, seen = [], set()
+    for item in config.WATCH_ITEMS:
+        if item.get("method") != "page_update" or "anime-matsuri" not in item.get("url", ""):
+            continue
+        val = new_state.get(item["key"]) or prev.get(item["key"])
+        lines = val.get("lines") if isinstance(val, dict) else None
+        if not lines:
+            continue
+        # 商品名の要約（「ポケカ 」「 抽選/再販まとめ（anime-matsuri）」等の定型を削る）
+        short = item["name"]
+        for w in (" 抽選/再販まとめ（anime-matsuri）", " 抽選/予約まとめ（anime-matsuri）",
+                  " 再販告知まとめ（anime-matsuri）", "ポケカ ", "ワンピ "):
+            short = short.replace(w, "")
+        for i, line in enumerate(lines):
+            if not any(kw in line for kw in config.OPPORTUNITY_KEYWORDS):
+                continue
+            # 短すぎる断片（テーブルセル由来）・長文や関連記事紹介文はチャンスでない
+            if not (config.DIGEST_LINE_MINLEN <= len(line) <= config.DIGEST_LINE_MAXLEN):
+                continue
+            if any(mk in line for mk in config.DIGEST_EXCLUDE_MARKERS):
+                continue
+            # 判定①: 近い将来の日付つき。日付が隣の行（テーブルの期間セル）にある構造に
+            # 対応するため、次の行まで結合して判定する。
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            ctx_dates = _upcoming_dates(line + "　" + nxt, today)
+            dated = any(0 <= (d - today).days <= config.OPPORTUNITY_WINDOW_DAYS for d in ctx_dates)
+            # 判定②: 日付がなくても「今応募できる」マーカー（Amazon招待リクエスト等）。
+            # ただし過去の年（例: 2025年1月〜）に言及する行は古い履歴なので除外する。
+            years = [int(y) for y in re.findall(r"(20\d\d)年", line)]
+            stale = bool(years) and min(years) < today.year
+            open_now = (not stale) and any(mk in line for mk in config.DIGEST_OPEN_MARKERS)
+            if not (dated or open_now):
+                continue
+            # 表示: 日付が隣の行にしかない場合はその行も添える
+            text = line
+            if dated and not _upcoming_dates(line, today) and nxt:
+                text = f"{line} ／ {nxt[:40]}"
+            # 重複判定は行テキストのみで行う（同じ告知が複数商品ページに載る場合の重複排除）
+            if text in seen:
+                continue
+            seen.add(text)
+            out.append(f"[{short}] {text[:90]}")
+            if len(out) >= config.DIGEST_MAX_LINES:
+                return out
+    return out
+
+
 def append_heartbeat(prev, new_state, alerts, health):
     """日次ヘルスレポート: JST9時以降の最初のパスで、Bot生存＋監視状態サマリを1通送る。
     「沈黙が『検知なし』なのか『Bot停止』なのか分からない」問題への対策
@@ -715,6 +796,19 @@ def append_heartbeat(prev, new_state, alerts, health):
     }
     print("  📊 日次ヘルスレポートを送信")
     alerts.append((hb_item, " ／ ".join(lines), "info"))
+
+    # 応募/予約チャンス・ダイジェスト（ヘルスレポートと同じ朝1回に同梱）。
+    # 「再販の瞬間を待つ」だけでは通知は稀にしか来ない。締切が先にある抽選・予約は
+    # 速度勝負でない確実な入手ルートなので、毎朝「今日応募できるもの」を能動的に提示する。
+    opps = extract_opportunities(prev, new_state, now_jst.date())
+    if opps:
+        digest_item = {
+            "name": f"📅 応募/予約チャンス {len(opps)}件（{config.OPPORTUNITY_WINDOW_DAYS}日以内の日付つき）",
+            "url": "https://anime-matsuri.com/",
+            "retail_price": 0,
+        }
+        print(f"  📅 チャンスダイジェスト {len(opps)}件を送信")
+        alerts.append((digest_item, "\n" + "\n".join("・" + o for o in opps), "info"))
 
 
 def run_once():
