@@ -293,7 +293,9 @@ WATCH_ITEMS = [
     # ⚠ nyuka-nowはクラウドIP遮断のためGitHub Actionsからは常時「判定不能」になる。
     #   平日にローカルMacで実行したときだけ機能するボーナス層（サーキットブレーカーで
     #   クラウド実行時のコストはほぼゼロ）。anime-matsuriに専用ページが無い銘柄
-    #   （DBFW SB01/FB10・遊戯王WPP7/RC04・コナンCT-P09）のカバーもここが担う。
+    #   （DBFW SB01/FB10・遊戯王WPP7/RC04・コナンCT-P09）のカバーだけをここに残す。
+    #   ※ポケカ3ページ(テラスタル/ホワイトフレア/ブラックボルト)はanime-matsuri版と
+    #     完全重複のため2026-07-08に削除（クラウドでは常時取得不能だった）。
     {
         "name": "DBFW CROSS FORCE FB10 再販集約",
         "method": "page_update",
@@ -310,29 +312,6 @@ WATCH_ITEMS = [
         "retail_price": 7920,
         "price_url": "https://price-base.com/useful/mangabooster01-box-market",
         "key": "dbfw_sb01_news",
-    },
-    {
-        "name": "ポケカ テラスタルフェスex 再販集約",
-        "method": "page_update",
-        "url": "https://nyuka-now.com/archives/144710",
-        "retail_price": 5500,
-        "key": "pokeca_terastal_news",
-    },
-    {
-        "name": "ポケカ ホワイトフレア 再販集約",
-        "method": "page_update",
-        "url": "https://nyuka-now.com/archives/145377",
-        "retail_price": 5800,
-        "key": "pokeca_whiteflare_news",
-    },
-    {
-        # 検索URL(?s=)は「○年○月○日現在」の揮発日付＋無関係記事の混入で毎回ハッシュ変化
-        # していたため、ホワイトフレア(145377)と対の安定した個別まとめ記事に差し替え。
-        "name": "ポケカ ブラックボルト 再販集約",
-        "method": "page_update",
-        "url": "https://nyuka-now.com/archives/145378",
-        "retail_price": 5800,
-        "key": "pokeca_blackbolt_news",
     },
     {
         "name": "ワンピTCG 在庫・再販集約（横断）",
@@ -382,14 +361,10 @@ WATCH_ITEMS = [
         "retail_price": 0,
         "key": "pokecard_official",
     },
-    # --- ポケセン実店舗 販売方法ページ（都内店頭チャネル。matoca抽選/整理券の事前確定）---
-    {
-        "name": "ポケセン トウキョーDX 店頭ニュース",
-        "method": "page_update",
-        "url": "https://shop.pokemon.co.jp/ja/shop/pokemoncenter-tokyodx/news/",
-        "retail_price": 0,
-        "key": "pokecenter_tokyodx_news",
-    },
+    # ※ポケセン トウキョーDX 店頭ニュースは2026-07-08に監視除外。
+    #   実査の結果、静的HTMLから取れるのは5/22付の古い見出し2行のみで6週間以上無変化＝
+    #   実質何も監視できていないゾンビだった（本体はJSレンダリング）。
+    #   都内店頭・30th抽選の告知はポケカ公式info＋anime-matsuri 30thページでカバーする。
     # ※メガトウキョー店頭ニュース(pokemoncenter-megatokyo/news/)はJSレンダリングで
     #   本文が取得できず常時「抽出0行・判定不能」だったため監視から除外(2026-07-02)。
     #   トウキョーDX側は静的HTMLに見出しが出るため監視継続（販売方法告知は全店共通が多い）。
