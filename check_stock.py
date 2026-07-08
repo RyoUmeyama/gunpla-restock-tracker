@@ -825,6 +825,133 @@ def append_heartbeat(prev, new_state, alerts, health):
         print("  📅 新規の応募/予約チャンスなし")
 
 
+def _process_item(item, prev, new_state, alerts, health):
+    """1監視項目の判定・状態更新・通知起票。run_once から項目ごとに例外隔離されて呼ばれる。"""
+    key = item["key"]
+
+    if item.get("method") == "pokecard_official_list":
+        # ポケカ公式API: (title,releaseDate)セット差分で新商品を検知（初回は基準記録）
+        products, ok = fetch_pokecard_new_products()
+        if not ok:
+            new_state[key] = prev.get(key, [])
+            health["fail"].append((item["name"], item.get("url", "")))
+            print(f"  {item['name']}: 判定不能（前回状態を維持）")
+            return
+        health["ok"].append(item["name"])
+        cur_keys = sorted(products.keys())
+        new_state[key] = cur_keys
+        prev_keys = prev.get(key, None)
+        if prev_keys is None:
+            print(f"  {item['name']}: 初回・{len(cur_keys)}商品を記録（通知なし）")
+        else:
+            fresh = [k for k in cur_keys if k not in set(prev_keys)]
+            if fresh:
+                names = "、".join(products[k]["title"] for k in fresh[:5])
+                print(f"  {item['name']}: 新商品{len(fresh)}件検知🔔 ← 通知（{names}）")
+                detail_lines = []
+                for k in fresh:
+                    p = products[k]
+                    detail_lines.append(f"{p['title']}（{p['releaseDate']} {p['price']}）{p['link']}")
+                alerts.append((item, "ポケカ新商品: " + " / ".join(detail_lines[:5]), "info"))
+            else:
+                print(f"  {item['name']}: 新商品なし（{len(cur_keys)}商品）")
+        return
+
+    if item.get("method") == "page_update":
+        # 告知ページ: 前回ハッシュと変化したら通知（初回は基準値を保存のみ）
+        sig, lines, ok = compute_page_signature(item)
+        time.sleep(config.REQUEST_INTERVAL)
+        first_seen = key not in prev  # 初回判定はキー存在で統一(H4)
+        if not ok:
+            # 取得失敗: 前回値があれば維持、無ければキー未設定のまま(次回も初回扱い)
+            if key in prev:
+                new_state[key] = prev[key]
+            health["fail"].append((item["name"], item.get("url", "")))
+            print(f"  {item['name']}: 判定不能（前回状態を維持）")
+            return
+        health["ok"].append(item["name"])
+        # 状態は {"sig", "lines"}。旧形式（ハッシュ文字列のみ）からも読めるようにする。
+        prev_val = prev.get(key)
+        prev_sig = prev_val.get("sig") if isinstance(prev_val, dict) else prev_val
+        prev_lines = prev_val.get("lines") if isinstance(prev_val, dict) else None
+        new_state[key] = {"sig": sig, "lines": lines}
+        if first_seen:
+            print(f"  {item['name']}: 初回・基準を記録（通知なし）")
+        elif sig != prev_sig:
+            # 「何が変わったか」を通知に載せる（新規に現れた行＝新しい入荷/受付情報）。
+            # 従来は「更新されました」だけでページを開いて探す必要があり、精度が低かった。
+            added = []
+            if isinstance(prev_lines, list):
+                prev_set = set(prev_lines)
+                added = [l for l in lines if l not in prev_set]
+            if added:
+                shown = [l[: config.DIFF_LINE_MAXLEN] for l in added[: config.DIFF_LINES_SHOWN]]
+                more = f" …ほか{len(added) - len(shown)}行" if len(added) > len(shown) else ""
+                detail = f"更新検知・新規{len(added)}行: " + " ／ ".join(shown) + more
+            else:
+                detail = "再販告知が更新されました（既存行の削除/変更。リンク先で確認を）"
+            print(f"  {item['name']}: 告知更新を検知🔔 ← 通知（新規{len(added)}行）")
+            alerts.append((item, detail, "info"))
+        else:
+            print(f"  {item['name']}: 更新なし")
+        return
+
+    # 在庫系（gdb_soldout / toei_stock_status / rakuten_books）
+    in_stock, ok, detail = check_item(item)
+    time.sleep(config.REQUEST_INTERVAL)
+    if not ok:
+        new_state[key] = prev.get(key, False)  # 取得失敗は前回維持（誤通知防止）
+        health["fail"].append((item["name"], item.get("url", "")))
+        print(f"  {item['name']}: 判定不能（前回状態を維持）")
+        return
+
+    health["ok"].append(item["name"])
+
+    if item.get("method") == "gdb_soldout":
+        # 店舗単位の遷移検知: 「新たに在庫ありになった店」が現れたら通知する。
+        # 全体boolだけの判定では、Amazon(転売価格の場合あり)が在庫あり続けると状態が
+        # trueに張り付き、ヨドバシ等の定価店の復活を見逃す盲点があった。
+        # detail は _check_gdb_soldout が生成する在庫あり店名の ", " 連結。
+        # 大文字小文字の表記ゆれで「新規店舗」と誤判定しないよう小文字に正規化。
+        shops = [s.lower() for s in detail.split(", ") if s] if detail else []
+        prev_val = prev.get(key)
+        prev_shops = prev_val.get("shops") if isinstance(prev_val, dict) else None
+        new_state[key] = {"in_stock": in_stock, "shops": shops}
+        status = "在庫あり🟢" if in_stock else "在庫なし🔴"
+        if key not in prev:
+            print(f"  {item['name']}: {status} [{detail}]  （初回・基準を記録）")
+        elif prev_shops is None:
+            # 旧形式(bool)からの移行: 前回Falseなら従来どおり復活通知、Trueなら基準更新のみ
+            if in_stock and not bool(prev_val):
+                print(f"  {item['name']}: {status} [{detail}]  ← 復活！")
+                alerts.append((item, detail, "stock"))
+            else:
+                print(f"  {item['name']}: {status} [{detail}]  （店舗別基準に移行）")
+        else:
+            new_shops = [s for s in shops if s not in set(prev_shops)]
+            if new_shops:
+                d = f"新たに在庫あり: {', '.join(new_shops)}（在庫あり全店: {detail}）"
+                print(f"  {item['name']}: {status}  ← 新規店舗で復活！（{', '.join(new_shops)}）")
+                alerts.append((item, d, "stock"))
+            else:
+                print(f"  {item['name']}: {status} [{detail}]")
+        return
+
+    new_state[key] = in_stock
+    first_seen = key not in prev  # 初回は通知抑制（基準記録のみ）
+    was = prev.get(key, False)
+    was = bool(was) if isinstance(was, bool) else False
+    status = "在庫あり🟢" if in_stock else "在庫なし🔴"
+    change = ""
+    if first_seen:
+        change = "  （初回・基準を記録）"
+    elif in_stock and not was:
+        change = f"  ← 復活！（{detail}）"
+        alerts.append((item, detail, "stock"))  # 在庫検知=緊急(買える)
+    detail_note = f" [{detail}]" if detail else ""
+    print(f"  {item['name']}: {status}{detail_note}{change}")
+
+
 def run_once():
     """在庫チェックを1パス実行し、在庫復活/告知更新があれば通知する。状態はファイルで永続化。"""
     _UNREACHABLE_HOSTS.clear()  # 接続不能ホストの記録はパスごとにリセット（次パスで再挑戦）
@@ -833,12 +960,24 @@ def run_once():
     alerts = []  # [(item, detail)] 通知すべき変化
     health = {"ok": [], "fail": []}  # 日次ヘルスレポート用。fail は (name, url) のリスト
 
-    # Phase2: RSS発見器で新弾・再販を自動キャッチ（固定リストを動的に補完）
-    run_discovery(prev, new_state, alerts)
+    # Phase2: RSS発見器で新弾・再販を自動キャッチ（固定リストを動的に補完）。
+    # 想定外の例外でもパス全体を壊さない（関連stateを前回維持して継続）。
+    try:
+        run_discovery(prev, new_state, alerts)
+    except Exception as e:
+        for k in ("discovered", "toei_boxes"):
+            if k in prev:
+                new_state.setdefault(k, prev[k])
+        print(f"  ⚠ 発見層で想定外エラー（前回状態を維持）: {e}")
 
     # Phase3: 相場選別。定価割れが連続確定した銘柄は AUTO_DROP_ENABLED 時に監視スキップする。
     if config.PRICE_SCREEN_ENABLED:
-        run_price_screen(prev, new_state)
+        try:
+            run_price_screen(prev, new_state)
+        except Exception as e:
+            if "drop_counts" in prev:
+                new_state.setdefault("drop_counts", prev["drop_counts"])
+            print(f"  ⚠ 相場選別で想定外エラー（前回状態を維持）: {e}")
     drop_counts = prev.get("drop_counts", {})
 
     for item in config.WATCH_ITEMS:
@@ -852,127 +991,15 @@ def run_once():
             print(f"  {item['name']}: 相場選別により除外中（定価割れ連続{drop_counts[key]}回）")
             continue
 
-        if item.get("method") == "pokecard_official_list":
-            # ポケカ公式API: (title,releaseDate)セット差分で新商品を検知（初回は基準記録）
-            products, ok = fetch_pokecard_new_products()
-            if not ok:
-                new_state[key] = prev.get(key, [])
-                health["fail"].append((item["name"], item.get("url", "")))
-                print(f"  {item['name']}: 判定不能（前回状態を維持）")
-                continue
-            health["ok"].append(item["name"])
-            cur_keys = sorted(products.keys())
-            new_state[key] = cur_keys
-            prev_keys = prev.get(key, None)
-            if prev_keys is None:
-                print(f"  {item['name']}: 初回・{len(cur_keys)}商品を記録（通知なし）")
-            else:
-                fresh = [k for k in cur_keys if k not in set(prev_keys)]
-                if fresh:
-                    names = "、".join(products[k]["title"] for k in fresh[:5])
-                    print(f"  {item['name']}: 新商品{len(fresh)}件検知🔔 ← 通知（{names}）")
-                    detail_lines = []
-                    for k in fresh:
-                        p = products[k]
-                        detail_lines.append(f"{p['title']}（{p['releaseDate']} {p['price']}）{p['link']}")
-                    alerts.append((item, "ポケカ新商品: " + " / ".join(detail_lines[:5]), "info"))
-                else:
-                    print(f"  {item['name']}: 新商品なし（{len(cur_keys)}商品）")
-            continue
-
-        if item.get("method") == "page_update":
-            # 告知ページ: 前回ハッシュと変化したら通知（初回は基準値を保存のみ）
-            sig, lines, ok = compute_page_signature(item)
-            time.sleep(config.REQUEST_INTERVAL)
-            first_seen = key not in prev  # 初回判定はキー存在で統一(H4)
-            if not ok:
-                # 取得失敗: 前回値があれば維持、無ければキー未設定のまま(次回も初回扱い)
-                if key in prev:
-                    new_state[key] = prev[key]
-                health["fail"].append((item["name"], item.get("url", "")))
-                print(f"  {item['name']}: 判定不能（前回状態を維持）")
-                continue
-            health["ok"].append(item["name"])
-            # 状態は {"sig", "lines"}。旧形式（ハッシュ文字列のみ）からも読めるようにする。
-            prev_val = prev.get(key)
-            prev_sig = prev_val.get("sig") if isinstance(prev_val, dict) else prev_val
-            prev_lines = prev_val.get("lines") if isinstance(prev_val, dict) else None
-            new_state[key] = {"sig": sig, "lines": lines}
-            if first_seen:
-                print(f"  {item['name']}: 初回・基準を記録（通知なし）")
-            elif sig != prev_sig:
-                # 「何が変わったか」を通知に載せる（新規に現れた行＝新しい入荷/受付情報）。
-                # 従来は「更新されました」だけでページを開いて探す必要があり、精度が低かった。
-                added = []
-                if isinstance(prev_lines, list):
-                    prev_set = set(prev_lines)
-                    added = [l for l in lines if l not in prev_set]
-                if added:
-                    shown = [l[: config.DIFF_LINE_MAXLEN] for l in added[: config.DIFF_LINES_SHOWN]]
-                    more = f" …ほか{len(added) - len(shown)}行" if len(added) > len(shown) else ""
-                    detail = f"更新検知・新規{len(added)}行: " + " ／ ".join(shown) + more
-                else:
-                    detail = "再販告知が更新されました（既存行の削除/変更。リンク先で確認を）"
-                print(f"  {item['name']}: 告知更新を検知🔔 ← 通知（新規{len(added)}行）")
-                alerts.append((item, detail, "info"))
-            else:
-                print(f"  {item['name']}: 更新なし")
-            continue
-
-        # 在庫系（gdb_soldout / toei_stock_status / rakuten_books）
-        in_stock, ok, detail = check_item(item)
-        time.sleep(config.REQUEST_INTERVAL)
-        if not ok:
-            new_state[key] = prev.get(key, False)  # 取得失敗は前回維持（誤通知防止）
+        # 1商品の判定で想定外の例外が起きてもパス全体を壊さない（バグ・サイト構造の
+        # 急変・不正なレスポンス等）。その商品だけ前回状態を維持して次へ進む。
+        try:
+            _process_item(item, prev, new_state, alerts, health)
+        except Exception as e:
+            if key in prev:
+                new_state[key] = prev[key]
             health["fail"].append((item["name"], item.get("url", "")))
-            print(f"  {item['name']}: 判定不能（前回状態を維持）")
-            continue
-
-        health["ok"].append(item["name"])
-
-        if item.get("method") == "gdb_soldout":
-            # 店舗単位の遷移検知: 「新たに在庫ありになった店」が現れたら通知する。
-            # 全体boolだけの判定では、Amazon(転売価格の場合あり)が在庫あり続けると状態が
-            # trueに張り付き、ヨドバシ等の定価店の復活を見逃す盲点があった。
-            # detail は _check_gdb_soldout が生成する在庫あり店名の ", " 連結。
-            # 大文字小文字の表記ゆれで「新規店舗」と誤判定しないよう小文字に正規化。
-            shops = [s.lower() for s in detail.split(", ") if s] if detail else []
-            prev_val = prev.get(key)
-            prev_shops = prev_val.get("shops") if isinstance(prev_val, dict) else None
-            new_state[key] = {"in_stock": in_stock, "shops": shops}
-            status = "在庫あり🟢" if in_stock else "在庫なし🔴"
-            if key not in prev:
-                print(f"  {item['name']}: {status} [{detail}]  （初回・基準を記録）")
-            elif prev_shops is None:
-                # 旧形式(bool)からの移行: 前回Falseなら従来どおり復活通知、Trueなら基準更新のみ
-                if in_stock and not bool(prev_val):
-                    print(f"  {item['name']}: {status} [{detail}]  ← 復活！")
-                    alerts.append((item, detail, "stock"))
-                else:
-                    print(f"  {item['name']}: {status} [{detail}]  （店舗別基準に移行）")
-            else:
-                new_shops = [s for s in shops if s not in set(prev_shops)]
-                if new_shops:
-                    d = f"新たに在庫あり: {', '.join(new_shops)}（在庫あり全店: {detail}）"
-                    print(f"  {item['name']}: {status}  ← 新規店舗で復活！（{', '.join(new_shops)}）")
-                    alerts.append((item, d, "stock"))
-                else:
-                    print(f"  {item['name']}: {status} [{detail}]")
-            continue
-
-        new_state[key] = in_stock
-        first_seen = key not in prev  # 初回は通知抑制（基準記録のみ）
-        was = prev.get(key, False)
-        was = bool(was) if isinstance(was, bool) else False
-        status = "在庫あり🟢" if in_stock else "在庫なし🔴"
-        change = ""
-        if first_seen:
-            change = "  （初回・基準を記録）"
-        elif in_stock and not was:
-            change = f"  ← 復活！（{detail}）"
-            alerts.append((item, detail, "stock"))  # 在庫検知=緊急(買える)
-        detail_note = f" [{detail}]" if detail else ""
-        print(f"  {item['name']}: {status}{detail_note}{change}")
+            print(f"  ⚠ {item['name']}: 想定外エラーで判定不能（前回状態を維持）: {e}")
 
     # 日次ヘルスレポート（JST9時以降の最初のパスで1通・生存確認）
     append_heartbeat(prev, new_state, alerts, health)

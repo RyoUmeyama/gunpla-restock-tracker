@@ -1,0 +1,26 @@
+name: Notify on Failure
+
+# 在庫チェッカーの実行が失敗した瞬間にDiscordへ通知する。
+# 2026年6月にActions無料枠切れで3週間気づかず全停止した教訓:
+# 「毎朝のヘルスレポートが来ない」で気づくより早く、失敗そのものを即知らせる。
+on:
+  workflow_run:
+    workflows: ["Check Gunpla Restock"]
+    types: [completed]
+
+jobs:
+  notify:
+    if: github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send Discord alert
+        env:
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then echo "WEBHOOK_URL未設定・スキップ"; exit 0; fi
+          curl -s -X POST -H "Content-Type: application/json" \
+            -d "{\"content\":\"🚨 **在庫チェッカーの実行が失敗しました**（conclusion: ${CONCLUSION}）\\n原因の確認: ${RUN_URL}\\n※連続する場合はActions枠切れ・Secrets失効・サイト構造変化の可能性\"}" \
+            "$WEBHOOK_URL"
