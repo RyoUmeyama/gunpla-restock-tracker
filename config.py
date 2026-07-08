@@ -395,6 +395,28 @@ TOEI_INSTOCK_MEANS_NOT = "0"  # stock_status がこの値なら在庫なし
 # ※揮発日付（○月○日更新・○時○分時点）は compute_page_signature で除外して誤検知を防ぐ。
 PAGE_UPDATE_KEYWORDS = ["受付中", "予約", "抽選", "先着", "再販", "入荷", "整理券", "販売方法", "コラボ", "限定", "プロモ", "受注"]
 # page_update の差分通知: stateに保持する抽出行の上限（肥大防止）と、通知に載せる新規行数
+# 通知する価値がある「実質的な情報」の判定語。追加行がこれを含む場合だけ通知する
+# （ボイラープレートの変化・行の削除だけの更新は通知しない＝正確な情報のみ通知）。
+NOTIFY_ACTION_KEYWORDS = ["再販", "入荷", "抽選", "予約", "受付", "先着", "販売", "在庫", "整理券", "受注"]
+# 遷移先ストアURLとして認めるドメイン（追加行の近傍リンクから抽出。これ以外は載せない＝
+# Googleフォーム・SNS等のノイズURL混入防止）
+STORE_DOMAINS = [
+    "amazon.co.jp", "amzn.to", "rakuten.co.jp", "yodobashi.com", "animate", "amiami",
+    "biccamera", "yamada", "7net", "omni7", "hmv", "tsutaya", "store.toei-anim",
+    "pokemon", "hobby", "joshin", "edion", "lawson", "aeon", "toysrus", "surugaya",
+]
+# 行内の店舗名→URLドメインの対応。行に店舗名があるときはドメインが一致するリンクだけを
+# 採用する（隣の行のリンクを誤って拾う「ズレ」の防止）。
+STORE_NAME_HINTS = {
+    "Amazon": ["amazon", "amzn"], "アマゾン": ["amazon", "amzn"],
+    "楽天": ["rakuten"], "ヨドバシ": ["yodobashi"],
+    "ポケモンセンター": ["pokemoncenter"], "ポケセン": ["pokemoncenter"],
+    "あみあみ": ["amiami"], "アニメイト": ["animate"], "駿河屋": ["surugaya"],
+    "ビックカメラ": ["biccamera"], "ヤマダ": ["yamada"], "セブン": ["7net", "omni7"],
+    "HMV": ["hmv"], "TSUTAYA": ["tsutaya"], "東映": ["toei-anim"],
+    "ローソン": ["lawson"], "トイザらス": ["toysrus"], "ジョーシン": ["joshin"],
+    "エディオン": ["edion"], "ホビーサーチ": ["hobbysearch"],
+}
 PAGE_LINES_KEEP = 400    # stateに保存する行数上限
 DIFF_LINES_SHOWN = 6     # 通知本文に載せる新規行の最大数
 DIFF_LINE_MAXLEN = 70    # 1行の最大表示文字数
