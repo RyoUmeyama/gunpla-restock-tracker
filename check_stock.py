@@ -285,9 +285,12 @@ def fetch_altema_box_prices():
     return prices, True
 
 
-def fetch_pricebase_box_price(url):
-    """price-base の個別BOX相場記事から代表価格(中央値的な最頻値)を取得する。
+def fetch_pricebase_box_price(url, retail=0):
+    """price-base の個別BOX相場記事から代表価格(中央値)を取得する。
     他TCG(ワンピ/遊戯王/DBFW)の相場源。altemaがポケカ専門のため。
+    retail(定価)が分かる場合は価格帯を定価×0.9〜×10に絞る。ページ上の全数値の
+    中央値方式はカートン(12BOX)や高額シングル価格が混入して跳ね上がることがある
+    (実例: SB01が7万→15万に跳ねた)ための防御。
     返り値: (price:int|None, ok:bool)。"""
     try:
         resp = http_get(url, allow_redirects=True)
@@ -296,10 +299,11 @@ def fetch_pricebase_box_price(url):
         print(f"  ⚠ price-base取得失敗: {e}")
         return None, False
 
-    # BOX価格帯(3000〜200000円)の数値を集め、中央値を代表価格とする。
+    # 価格帯で絞った数値の中央値を代表価格とする。
     # 中央値は外れ値(極端な広告・セット品価格)に強く、最頻値の同数ブレ問題も避けられる。
+    lo, hi = (int(retail * 0.9), int(retail * 10)) if retail else (3000, 200000)
     nums = [int(p.replace(",", "")) for p in re.findall(r"([0-9,]{4,})\s*円", html)]
-    box_nums = sorted(n for n in nums if 3000 <= n <= 200000)
+    box_nums = sorted(n for n in nums if lo <= n <= hi)
     if not box_nums:
         return None, False
     mid = len(box_nums) // 2
@@ -657,7 +661,7 @@ def run_price_screen(prev, new_state):
         # 相場源: item に price_url(price-base個別記事)があれば他TCGもそこから取る。
         # なければポケカは altema辞書から銘柄名で部分一致（altemaはポケカ専門）。
         if item.get("price_url"):
-            market, pok = fetch_pricebase_box_price(item["price_url"])
+            market, pok = fetch_pricebase_box_price(item["price_url"], retail)
             time.sleep(config.REQUEST_INTERVAL)
             if not pok:
                 market = None
