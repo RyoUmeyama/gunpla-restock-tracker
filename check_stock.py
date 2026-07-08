@@ -318,7 +318,7 @@ def _normalize_box_name(s):
               "（横断）", "(横断)", "（在庫）", "(在庫)"):
         s = s.replace(w, "")
     # 空白・中黒・括弧などの照合ノイズを除去
-    s = re.sub(r"[\s　・,，()（）\[\]【】]", "", s)
+    s = re.sub(r"[\s　・,，()（）\[\]【】「」]", "", s)
     return s
 
 
@@ -713,6 +713,30 @@ def _upcoming_dates(text, today):
     return found
 
 
+def suggest_watch_candidates(prices, official_titles):
+    """altema相場辞書から「買取が高いのに未監視」のポケカ銘柄を監視追加候補として返す。
+    (1)価格帯フィルタ (2)ポケカ公式APIの現行商品リストとの照合（絶版＝正規入手ルートが
+    無い銘柄を除外） (3)既存WATCH_ITEMSとの双方向部分一致で未監視のみ、を通過したものを
+    高値順に返す。official_titles はポケカ公式APIの商品タイトル一覧。"""
+    watched = [_normalize_box_name(it["name"]) for it in config.WATCH_ITEMS]
+    current = [_normalize_box_name(t) for t in official_titles]
+    cands = []
+    for name, price in prices.items():
+        if not (config.SUGGEST_MIN_PRICE <= price <= config.SUGGEST_MAX_PRICE):
+            continue
+        nk = _normalize_box_name(name)
+        if len(nk) < 3:
+            continue
+        # 公式の現行商品リスト（直近1〜2年の発売分）に無い＝絶版でチャンスが湧かない
+        if not any(nk in c for c in current):
+            continue
+        if any(w and (w in nk or nk in w) for w in watched):
+            continue
+        cands.append((price, name))
+    cands.sort(reverse=True)
+    return [f"{n}（買取{p:,}円）" for p, n in cands]
+
+
 def extract_opportunities(prev, new_state, today):
     """監視中のanime-matsuriまとめページの抽出行から「応募/予約チャンス」を集める。
     条件: 抽選/予約/受付/応募/先着 のいずれかを含み、かつ今日〜OPPORTUNITY_WINDOW_DAYS日
@@ -773,6 +797,7 @@ def append_heartbeat(prev, new_state, alerts, health):
     today = now_jst.strftime("%Y-%m-%d")
     new_state["last_heartbeat"] = prev.get("last_heartbeat")
     new_state["digest_seen"] = prev.get("digest_seen")  # 非発火パスでも既知チャンスを維持する
+    new_state["suggested_seen"] = prev.get("suggested_seen")
     if now_jst.hour < 9 or prev.get("last_heartbeat") == today:
         return
     new_state["last_heartbeat"] = today
@@ -823,6 +848,37 @@ def append_heartbeat(prev, new_state, alerts, health):
         alerts.append((digest_item, "\n" + "\n".join("・" + o for o in fresh), "info"))
     else:
         print("  📅 新規の応募/予約チャンスなし")
+
+    # 監視追加候補の自動提案（altema相場ベース・提案済みは再提案しない）。
+    # 監視リストが市場の移り変わりで古びるのを防ぐ（アビスアイ等の見落とし再発防止）。
+    try:
+        prices, ok_p = fetch_altema_box_prices()
+        if ok_p:
+            sugg_prev = prev.get("suggested_seen")
+            first_sugg = not isinstance(sugg_prev, list)
+            sugg_seen = list(sugg_prev or [])
+            officials = new_state.get("pokecard_official") or prev.get("pokecard_official") or []
+            titles = [k.split("|")[0] for k in officials]
+            cands = [c for c in suggest_watch_candidates(prices, titles) if c not in set(sugg_seen)]
+            cands = cands[: config.SUGGEST_MAX]
+            sugg_seen.extend(cands)
+            new_state["suggested_seen"] = sugg_seen[-config.DIGEST_SEEN_KEEP:]
+            if first_sugg:
+                print(f"  🧭 監視追加候補: 初回・{len(cands)}件を記録（通知なし）")
+            elif cands:
+                sug_item = {
+                    "name": f"🧭 監視追加候補 {len(cands)}件（相場が高いのに未監視）",
+                    "url": config.ALTEMA_BOX_URL,
+                    "retail_price": 0,
+                }
+                print(f"  🧭 監視追加候補 {len(cands)}件を提案")
+                alerts.append((sug_item,
+                               "\n" + "\n".join("・" + c for c in cands) +
+                               "\n（監視に追加したい銘柄があればClaude Codeに伝えてください）", "info"))
+            else:
+                print("  🧭 新規の監視追加候補なし")
+    except Exception as e:
+        print(f"  ⚠ 監視追加候補の算出でエラー（スキップ）: {e}")
 
 
 def _process_item(item, prev, new_state, alerts, health):
