@@ -255,6 +255,15 @@ class TestStoreLinkResolution(unittest.TestCase):
         link = cs.resolve_store_link(html, "【ヨドバシ】7月10日 抽選受付開始")
         self.assertEqual(link, "https://www.yodobashi.com/product/100000/")
 
+
+    def test_unwrap_with_html_entity_escaped_params(self):
+        # HTML内のhrefは&が&amp;になっている。resolve_store_link側で復元してから剥がす
+        html = ('<td>【楽天ブックス】7月20日 再販予約</td>'
+                '<a href="https://af.moshimo.com/af/c/click?a_id=1&amp;p_id=2&amp;'
+                'url=https%3A%2F%2Fbooks.rakuten.co.jp%2Frb%2F999%2F">リンク</a>')
+        link = cs.resolve_store_link(html, "【楽天ブックス】7月20日 再販予約")
+        self.assertEqual(link, "https://books.rakuten.co.jp/rb/999/")
+
     def test_resolve_none_when_not_found(self):
         self.assertIsNone(cs.resolve_store_link("<p>無関係</p>", "【ヨドバシ】7月10日 抽選受付"))
 
@@ -270,6 +279,16 @@ class TestActionableLine(unittest.TestCase):
 
     def test_no_action_keyword_not_actionable(self):
         self.assertFalse(cs._is_actionable_line("新カードのイラストが公開されました"))
+
+
+    def test_upcoming_date_line_actionable(self):
+        # 行動語が無くても近い将来の日付を含む行（受付期間の更新）は実質情報
+        from datetime import date
+        self.assertTrue(cs._is_actionable_line("2026年7月15日〜7月22日", date(2026, 7, 8)))
+
+    def test_stale_date_line_not_actionable(self):
+        from datetime import date
+        self.assertFalse(cs._is_actionable_line("2025年1月10日〜1月17日", date(2026, 7, 8)))
 
     def test_too_short_not_actionable(self):
         self.assertFalse(cs._is_actionable_line("再販"))

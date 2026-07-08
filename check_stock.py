@@ -557,14 +557,22 @@ def _unwrap_affiliate(url):
     return url
 
 
-def _is_actionable_line(line):
+def _is_actionable_line(line, today=None):
     """追加行が「通知する価値のある実質情報」か判定する。
-    再販/入荷/抽選/予約等の行動語を含み、定型文・ナビ断片でないこと。"""
+    (1)再販/入荷/抽選/予約等の行動語を含む、または
+    (2)近い将来の日付を含む（受付期間の行だけが更新されるケース。行動語が無くても
+       締切変更・新規期間の追加は行動情報なので抑制しない）
+    かつ、定型文・ナビ断片でないこと。"""
     if not (config.DIGEST_LINE_MINLEN <= len(line) <= 120):
         return False
     if any(mk in line for mk in config.DIGEST_EXCLUDE_MARKERS):
         return False
-    return any(kw in line for kw in config.NOTIFY_ACTION_KEYWORDS)
+    if any(kw in line for kw in config.NOTIFY_ACTION_KEYWORDS):
+        return True
+    if today is not None:
+        dates = _upcoming_dates(line, today)
+        return any(0 <= (d - today).days <= config.OPPORTUNITY_WINDOW_DAYS for d in dates)
+    return False
 
 
 def resolve_store_link(html, line):
@@ -587,7 +595,10 @@ def resolve_store_link(html, line):
     # ウィンドウ内のストアドメインのリンクだけを候補にする（フォーム/SNS等のノイズは不採用）
     cands = []  # (ウィンドウ内位置, 実URL)
     for m in re.finditer(r'href="(https?://[^"]+?)"', window):
-        real = _unwrap_affiliate(m.group(1))
+        # HTML内のhrefは&が&amp;にエスケープされており、そのままだとparse_qsが
+        # パラメータ名を「amp;url」と誤認してアフィリエイト剥がしに失敗する（実バグ対応）
+        href = m.group(1).replace("&amp;", "&").replace("&#038;", "&")
+        real = _unwrap_affiliate(href)
         if "anime-matsuri.com" in real or "nyuka-now.com" in real:
             continue
         if any(d in real for d in config.STORE_DOMAINS):
@@ -1008,9 +1019,10 @@ def _process_item(item, prev, new_state, alerts, health):
         prev_val = prev.get(key)
         prev_sig = prev_val.get("sig") if isinstance(prev_val, dict) else prev_val
         prev_lines = prev_val.get("lines") if isinstance(prev_val, dict) else None
+        today_jst = datetime.now(ZoneInfo("Asia/Tokyo")).date()
         links = {}
         for l in lines:
-            if _is_actionable_line(l):
+            if _is_actionable_line(l, today_jst):
                 url = resolve_store_link(html, l)
                 if url:
                     links[l] = url
@@ -1024,7 +1036,7 @@ def _process_item(item, prev, new_state, alerts, health):
                 added = [l for l in lines if l not in prev_set]
             # 「実質的な情報の行」だけに絞る。定型文の変化や行の削除だけの更新は
             # 通知しない（=通知が来たら本物、の精度を守る）。
-            actionable = [l for l in added if _is_actionable_line(l)]
+            actionable = [l for l in added if _is_actionable_line(l, today_jst)]
             if not actionable:
                 print(f"  {item['name']}: 更新あり（実質情報なし・通知抑制。新規{len(added)}行）")
                 return
