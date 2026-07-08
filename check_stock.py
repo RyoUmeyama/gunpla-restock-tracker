@@ -772,6 +772,7 @@ def append_heartbeat(prev, new_state, alerts, health):
     now_jst = datetime.now(ZoneInfo("Asia/Tokyo"))
     today = now_jst.strftime("%Y-%m-%d")
     new_state["last_heartbeat"] = prev.get("last_heartbeat")
+    new_state["digest_seen"] = prev.get("digest_seen")  # 非発火パスでも既知チャンスを維持する
     if now_jst.hour < 9 or prev.get("last_heartbeat") == today:
         return
     new_state["last_heartbeat"] = today
@@ -799,16 +800,29 @@ def append_heartbeat(prev, new_state, alerts, health):
 
     # 応募/予約チャンス・ダイジェスト（ヘルスレポートと同じ朝1回に同梱）。
     # 「再販の瞬間を待つ」だけでは通知は稀にしか来ない。締切が先にある抽選・予約は
-    # 速度勝負でない確実な入手ルートなので、毎朝「今日応募できるもの」を能動的に提示する。
+    # 速度勝負でない確実な入手ルートなので、朝に能動的に提示する。
+    # ※通知するのは「新規に現れたチャンスだけ」。Amazon招待リクエスト等は一度登録すれば
+    #   再登録不要のため、既知のチャンスを毎朝繰り返し見せない（既知はstateに保持）。
     opps = extract_opportunities(prev, new_state, now_jst.date())
-    if opps:
+    seen_prev = prev.get("digest_seen")
+    first_digest = not isinstance(seen_prev, list)
+    seen = list(seen_prev or [])
+    fresh = [o for o in opps if o not in set(seen)]
+    seen.extend(fresh)
+    new_state["digest_seen"] = seen[-config.DIGEST_SEEN_KEEP:]
+    if first_digest:
+        # 導入初回: 現在見えているチャンスは対応済みとみなし、記録のみ（通知なし）
+        print(f"  📅 チャンスダイジェスト: 初回・既知{len(fresh)}件を記録（通知なし・対応済み扱い）")
+    elif fresh:
         digest_item = {
-            "name": f"📅 応募/予約チャンス {len(opps)}件（{config.OPPORTUNITY_WINDOW_DAYS}日以内の日付つき）",
+            "name": f"📅 新規の応募/予約チャンス {len(fresh)}件",
             "url": "https://anime-matsuri.com/",
             "retail_price": 0,
         }
-        print(f"  📅 チャンスダイジェスト {len(opps)}件を送信")
-        alerts.append((digest_item, "\n" + "\n".join("・" + o for o in opps), "info"))
+        print(f"  📅 新規チャンス {len(fresh)}件を送信")
+        alerts.append((digest_item, "\n" + "\n".join("・" + o for o in fresh), "info"))
+    else:
+        print("  📅 新規の応募/予約チャンスなし")
 
 
 def run_once():
