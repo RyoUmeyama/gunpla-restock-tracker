@@ -483,13 +483,14 @@ def fetch_pokecard_new_products():
 def compute_page_signature(item):
     """page_update方式: ページから再販関連の本文だけを抽出・正規化してハッシュを返す。
     広告・カウンタ等のノイズを避けるため、再販キーワードと日付を含む行に絞る。
-    返り値: (signature: str|None, lines: list[str]|None, ok: bool)。ok=False は取得失敗。
-    lines は抽出行（ページ内の出現順・重複除去済み）。前回との差分を通知本文に使う。"""
+    返り値: (signature, lines, ok, html)。ok=False は取得失敗。
+    lines は抽出行（ページ内の出現順・重複除去済み）。前回との差分を通知本文に使う。
+    html は追加行の近傍からストアリンクを解決するために返す。"""
     try:
         html = fetch(item["url"], config.DEFAULT_ENCODING)
     except Exception as e:
         print(f"  ⚠ 取得失敗 {item['name']}: {e}")
-        return None, None, False
+        return None, None, False, None
 
     # タグを除去してテキスト化
     text = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
@@ -531,14 +532,82 @@ def compute_page_signature(item):
     # 監視が事実上死に、将来1行拾えた瞬間に誤検知するため、判定不能(前回維持)にする(H3)。
     if not picked:
         print(f"  ⚠ 抽出0行 {item['name']}（本文を拾えず・判定不能）")
-        return None, None, False
+        return None, None, False, None
 
     # 正規化（重複除去・ソート）してハッシュ化。順序揺れに強くする。
     normalized = "\n".join(sorted(set(picked)))
     sig = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     # 差分表示用の行リスト（出現順・重複除去・肥大防止の上限あり）
     lines = list(dict.fromkeys(picked))[: config.PAGE_LINES_KEEP]
-    return sig, lines, True
+    return sig, lines, True, html
+
+
+def _unwrap_affiliate(url):
+    """楽天アフィリエイト/バリューコマース等のラッパーURLから実際の遷移先を取り出す。
+    取り出せない形式はそのまま返す（アフィリエイト経由でも商品ページには着地する）。"""
+    from urllib.parse import urlparse, parse_qs, unquote
+    try:
+        q = parse_qs(urlparse(url).query)
+        for key in ("pc", "m", "vc_url", "url", "u"):
+            vals = q.get(key)
+            if vals and vals[0].startswith("http"):
+                return unquote(vals[0])
+    except Exception:
+        pass
+    return url
+
+
+def _is_actionable_line(line):
+    """追加行が「通知する価値のある実質情報」か判定する。
+    再販/入荷/抽選/予約等の行動語を含み、定型文・ナビ断片でないこと。"""
+    if not (config.DIGEST_LINE_MINLEN <= len(line) <= 120):
+        return False
+    if any(mk in line for mk in config.DIGEST_EXCLUDE_MARKERS):
+        return False
+    return any(kw in line for kw in config.NOTIFY_ACTION_KEYWORDS)
+
+
+def resolve_store_link(html, line):
+    """追加行 line の近傍にあるストアへの外部リンクをHTMLから探して返す（無ければNone）。
+    「通知を見てもどのサイトに行けばいいか分からない」問題への対策:
+    集約ページ上で行の周辺にある遷移先URL（Amazon/楽天/ヨドバシ等）をそのまま通知に載せる。"""
+    if not html:
+        return None
+    idx = -1
+    for probe_len in (18, 10, 6):
+        probe = line[:probe_len].strip()
+        if len(probe) >= 4:
+            idx = html.find(probe)
+            if idx >= 0:
+                break
+    if idx < 0:
+        return None
+    win_start = max(0, idx - 1500)
+    window = html[win_start: idx + 1500]
+    # ウィンドウ内のストアドメインのリンクだけを候補にする（フォーム/SNS等のノイズは不採用）
+    cands = []  # (ウィンドウ内位置, 実URL)
+    for m in re.finditer(r'href="(https?://[^"]+?)"', window):
+        real = _unwrap_affiliate(m.group(1))
+        if "anime-matsuri.com" in real or "nyuka-now.com" in real:
+            continue
+        if any(d in real for d in config.STORE_DOMAINS):
+            cands.append((m.start(), real))
+    if not cands:
+        return None
+    # 行に店舗名があれば、ドメインが一致するリンクだけを採用（隣の行のリンク誤拾い防止）
+    for name, domains in config.STORE_NAME_HINTS.items():
+        if name in line:
+            matched = [c for c in cands if any(d in c[1] for d in domains)]
+            if matched:
+                cands = matched
+            else:
+                return None  # 店舗名は分かるのに一致リンクが無い→誤リンクを載せない
+            break
+    # 行の位置(ウィンドウ内では1500付近)より後ろにあるリンクを優先（表は「行→リンク」の順）
+    line_pos = idx - win_start
+    after = [c for c in cands if c[0] >= line_pos]
+    chosen = min(after, key=lambda c: c[0]) if after else max(cands, key=lambda c: c[0])
+    return chosen[1]
 
 
 def load_state():
@@ -752,6 +821,7 @@ def extract_opportunities(prev, new_state, today):
             continue
         val = new_state.get(item["key"]) or prev.get(item["key"])
         lines = val.get("lines") if isinstance(val, dict) else None
+        links = (val.get("links") or {}) if isinstance(val, dict) else {}
         if not lines:
             continue
         # 商品名の要約（「ポケカ 」「 抽選/再販まとめ（anime-matsuri）」等の定型を削る）
@@ -787,7 +857,10 @@ def extract_opportunities(prev, new_state, today):
             if text in seen:
                 continue
             seen.add(text)
-            out.append(f"[{short}] {text[:90]}")
+            entry = f"[{short}] {text[:90]}"
+            if links.get(line):
+                entry += f" →{links[line]}"  # 遷移先ストアURL
+            out.append(entry)
             if len(out) >= config.DIGEST_MAX_LINES:
                 return out
     return out
@@ -919,7 +992,7 @@ def _process_item(item, prev, new_state, alerts, health):
 
     if item.get("method") == "page_update":
         # 告知ページ: 前回ハッシュと変化したら通知（初回は基準値を保存のみ）
-        sig, lines, ok = compute_page_signature(item)
+        sig, lines, ok, html = compute_page_signature(item)
         time.sleep(config.REQUEST_INTERVAL)
         first_seen = key not in prev  # 初回判定はキー存在で統一(H4)
         if not ok:
@@ -930,27 +1003,40 @@ def _process_item(item, prev, new_state, alerts, health):
             print(f"  {item['name']}: 判定不能（前回状態を維持）")
             return
         health["ok"].append(item["name"])
-        # 状態は {"sig", "lines"}。旧形式（ハッシュ文字列のみ）からも読めるようにする。
+        # 状態は {"sig", "lines", "links"}。旧形式からも読めるようにする。
+        # links は「実質情報の行 → 近傍のストアURL」の対応（ダイジェスト表示にも使う）。
         prev_val = prev.get(key)
         prev_sig = prev_val.get("sig") if isinstance(prev_val, dict) else prev_val
         prev_lines = prev_val.get("lines") if isinstance(prev_val, dict) else None
-        new_state[key] = {"sig": sig, "lines": lines}
+        links = {}
+        for l in lines:
+            if _is_actionable_line(l):
+                url = resolve_store_link(html, l)
+                if url:
+                    links[l] = url
+        new_state[key] = {"sig": sig, "lines": lines, "links": links}
         if first_seen:
             print(f"  {item['name']}: 初回・基準を記録（通知なし）")
         elif sig != prev_sig:
-            # 「何が変わったか」を通知に載せる（新規に現れた行＝新しい入荷/受付情報）。
-            # 従来は「更新されました」だけでページを開いて探す必要があり、精度が低かった。
             added = []
             if isinstance(prev_lines, list):
                 prev_set = set(prev_lines)
                 added = [l for l in lines if l not in prev_set]
-            if added:
-                shown = [l[: config.DIFF_LINE_MAXLEN] for l in added[: config.DIFF_LINES_SHOWN]]
-                more = f" …ほか{len(added) - len(shown)}行" if len(added) > len(shown) else ""
-                detail = f"更新検知・新規{len(added)}行: " + " ／ ".join(shown) + more
-            else:
-                detail = "再販告知が更新されました（既存行の削除/変更。リンク先で確認を）"
-            print(f"  {item['name']}: 告知更新を検知🔔 ← 通知（新規{len(added)}行）")
+            # 「実質的な情報の行」だけに絞る。定型文の変化や行の削除だけの更新は
+            # 通知しない（=通知が来たら本物、の精度を守る）。
+            actionable = [l for l in added if _is_actionable_line(l)]
+            if not actionable:
+                print(f"  {item['name']}: 更新あり（実質情報なし・通知抑制。新規{len(added)}行）")
+                return
+            shown = []
+            for l in actionable[: config.DIFF_LINES_SHOWN]:
+                entry = l[: config.DIFF_LINE_MAXLEN]
+                if links.get(l):
+                    entry += f" →{links[l]}"  # 遷移先ストアURL（どのサイトに行けばいいか）
+                shown.append(entry)
+            more = f" …ほか{len(actionable) - len(shown)}行" if len(actionable) > len(shown) else ""
+            detail = f"更新検知・新規{len(actionable)}行: " + " ／ ".join(shown) + more
+            print(f"  {item['name']}: 告知更新を検知🔔 ← 通知（実質{len(actionable)}行/新規{len(added)}行）")
             alerts.append((item, detail, "info"))
         else:
             print(f"  {item['name']}: 更新なし")

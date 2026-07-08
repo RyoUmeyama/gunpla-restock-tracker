@@ -238,5 +238,42 @@ class TestExtractOpportunities(unittest.TestCase):
         self.assertIn("7月8日", opps[0])
 
 
+class TestStoreLinkResolution(unittest.TestCase):
+    """遷移先ストアURLの解決とアフィリエイト剥がし。"""
+
+    def test_unwrap_rakuten_affiliate(self):
+        url = "https://hb.afl.rakuten.co.jp/hgc/xxx/?pc=https%3A%2F%2Fbooks.rakuten.co.jp%2Frb%2F123%2F&m=http%3A%2F%2Fexample"
+        self.assertEqual(cs._unwrap_affiliate(url), "https://books.rakuten.co.jp/rb/123/")
+
+    def test_unwrap_passthrough(self):
+        self.assertEqual(cs._unwrap_affiliate("https://www.amazon.co.jp/dp/B0X"), "https://www.amazon.co.jp/dp/B0X")
+
+    def test_resolve_prefers_store_domain(self):
+        html = ('<tr><td>【ヨドバシ】7月10日 抽選受付開始</td>'
+                '<td><a href="https://twitter.com/share">share</a>'
+                '<a href="https://www.yodobashi.com/product/100000/">商品</a></td></tr>')
+        link = cs.resolve_store_link(html, "【ヨドバシ】7月10日 抽選受付開始")
+        self.assertEqual(link, "https://www.yodobashi.com/product/100000/")
+
+    def test_resolve_none_when_not_found(self):
+        self.assertIsNone(cs.resolve_store_link("<p>無関係</p>", "【ヨドバシ】7月10日 抽選受付"))
+
+
+class TestActionableLine(unittest.TestCase):
+    """通知価値の判定: 実質情報のみ通知。"""
+
+    def test_restock_line_actionable(self):
+        self.assertTrue(cs._is_actionable_line("【楽天ブックス】7月10日10時から再販予定"))
+
+    def test_boilerplate_not_actionable(self):
+        self.assertFalse(cs._is_actionable_line("抽選応募や予約受付中・受付予定のストア一覧まとめ"))
+
+    def test_no_action_keyword_not_actionable(self):
+        self.assertFalse(cs._is_actionable_line("新カードのイラストが公開されました"))
+
+    def test_too_short_not_actionable(self):
+        self.assertFalse(cs._is_actionable_line("再販"))
+
+
 if __name__ == "__main__":
     unittest.main()
