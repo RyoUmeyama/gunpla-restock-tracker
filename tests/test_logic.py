@@ -24,8 +24,13 @@ class TestTitleMatches(unittest.TestCase):
         self.assertFalse(cs._title_matches("ドラゴンボール フュージョンワールド プレイマット"))
 
     def test_box_products_pass(self):
-        self.assertTrue(cs._title_matches("ワンピース 一緒に学べるデッキセット(LT-01)"))
+        self.assertTrue(cs._title_matches("ワンピースカードゲーム 新時代の主役 BOX【再販】"))
         self.assertTrue(cs._title_matches("遊戯王 RARITY COLLECTION BOX【再販】"))
+
+    def test_non_card_onepiece_rejected(self):
+        # カード商品限定: 素の「ワンピース」（フィギュア等）は拾わない（2026-07-10仕様）
+        self.assertFalse(cs._title_matches("ワンピース ルフィ フィギュア ワーコレ"))
+        self.assertFalse(cs._title_matches("ドラゴンボール 超サイヤ人フィギュア"))
 
     def test_pokeca_is_exception(self):
         # ポケカ関連はサプライでも拾う（方針: 関連全部を定価なら狙う）
