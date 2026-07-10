@@ -310,22 +310,43 @@ class TestActionableLine(unittest.TestCase):
         self.assertTrue(cs._is_actionable_line(
             "拡張パック ストームエメラルダ BOXが 7月31日（金）に登場", date(2026, 7, 8)))
 
-    def test_noise_product_excluded(self):
-        # 定番商品（スターターセット/構築デッキ等）は行動語や日付があっても通知しない
-        # （「スターターセットex発売告知」メールの回帰テスト）
+    def test_deck_products_lifecycle_rules(self):
+        # 商品ライフサイクル規則（2026-07-10 ユーザードメイン知識）:
+        # スターターセット/構築デッキはポケカのみ初回販売だけ通知。再販は通知しない。
         from datetime import date
+        today = date(2026, 7, 8)
+        line_initial = "構築デッキ「スターターセットex」3種が、7月31日（金）に発売！"
+        # ポケカ×初回販売（発売前後60日の日付あり）→ 通知する
+        self.assertTrue(cs._is_actionable_line(line_initial, today, is_pokeca=True))
+        # ポケカ以外 → 通知しない
+        self.assertFalse(cs._is_actionable_line(line_initial, today, is_pokeca=False))
+        # ポケカでも再販 → 通知しない
         self.assertFalse(cs._is_actionable_line(
-            "構築デッキ「スターターセットex」3種が、7月31日（金）に発売！", date(2026, 7, 8)))
+            "スターターセットexの再販が7月31日に決定", today, is_pokeca=True))
+        # ポケカでも初回販売期の日付がない → 通知しない
         self.assertFalse(cs._is_actionable_line(
-            "スタートデッキ100の再販が決定", date(2026, 7, 8)))
+            "構築デッキ「スターターセットex」好評発売中", today, is_pokeca=True))
 
-    def test_strict_mode_requires_action_keyword(self):
-        # ニュース一覧ページ(strict)は行動語必須。発売告知だけの行は通知しない
+    def test_start_deck_always_notified(self):
+        # 例外: スタートデッキは再販でも人気 → 再販も通知する
+        from datetime import date
+        self.assertTrue(cs._is_actionable_line(
+            "スタートデッキ100の再販が決定", date(2026, 7, 8), is_pokeca=True))
+
+    def test_supply_always_excluded(self):
         from datetime import date
         self.assertFalse(cs._is_actionable_line(
-            "拡張パック ムニキスゼロが 7月31日（金）に登場", date(2026, 7, 8), strict=True))
-        self.assertTrue(cs._is_actionable_line(
-            "拡張パック ムニキスゼロの抽選販売を受付", date(2026, 7, 8), strict=True))
+            "デッキシールド ピカチュウが7月31日に発売", date(2026, 7, 8), is_pokeca=True))
+
+    def test_expired_product_mention_excluded(self):
+        # 発売から1年半超のポケカ商品への言及は除外（再販が来ないため）
+        from datetime import date
+        today = date(2026, 7, 10)
+        officials = ["拡張パック「超電ブレイカー」|2024年10月11日（金）",
+                     "拡張パック「アビスアイ」|2026年 5月22日（金）"]
+        expired = cs._expired_pokeca_titles({}, {"pokecard_official": officials}, today)
+        self.assertTrue(cs._mentions_expired("超電ブレイカーBOXの再販情報", expired))
+        self.assertFalse(cs._mentions_expired("アビスアイBOXの再販情報", expired))
 
     def test_stale_date_line_not_actionable(self):
         from datetime import date

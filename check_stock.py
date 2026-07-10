@@ -480,6 +480,26 @@ def fetch_pokecard_new_products():
     return products, any_ok
 
 
+def fetch_onepiece_news():
+    """ワンピ公式ニュースAPI（article_list.php）から記事一覧を取得する。
+    返り値: (articles: dict[key->{title,category,date}], ok: bool)。
+    key は "title|日付" で新着差分の判定に使う。"""
+    try:
+        resp = http_get(config.ONEPIECE_NEWS_API, params={"start": "0"})
+        arts = (resp.json().get("data") or {}).get("article_list") or []
+    except Exception as e:
+        print(f"  ⚠ ワンピニュースAPI取得失敗: {e}")
+        return {}, False
+    out = {}
+    for a in arts:
+        title = (a.get("title") or "").strip()
+        date = (a.get("dspdate") or "").strip()
+        cat = ((a.get("categories") or {}).get("name") or "").strip()
+        if title:
+            out[f"{title}|{date}"] = {"title": title, "category": cat, "date": date}
+    return out, bool(out)
+
+
 def compute_page_signature(item):
     """page_update方式: ページから再販関連の本文だけを抽出・正規化してハッシュを返す。
     広告・カウンタ等のノイズを避けるため、再販キーワードと日付を含む行に絞る。
@@ -557,19 +577,31 @@ def _unwrap_affiliate(url):
     return url
 
 
-def _is_actionable_line(line, today=None, strict=False):
+def _is_actionable_line(line, today=None, strict=False, is_pokeca=False):
     """追加行が「通知する価値のある実質情報」か判定する。
-    (1)再販/入荷/抽選/予約等の行動語を含む、または
-    (2)近い将来の日付＋日付以外の中身を含む（strict=Falseの場合のみ。
-       ニュース一覧ページは strict=True で行動語必須＝発売告知だけでは通知しない）
-    かつ、定型文・ナビ断片・定番商品カテゴリ（転売妙味なし）でないこと。"""
+    (1)再販/入荷/抽選/予約/コラボ/発売等の行動語を含む、または
+    (2)近い将来の日付＋日付以外の中身を含む（strict=Falseの場合のみ）
+    かつ、定型文・ナビ断片でなく、商品ライフサイクル規則に適合すること:
+      - サプライ類: 常に通知しない
+      - スターターセット/構築デッキ系: ポケカのみ初回販売（発売前後60日の告知）だけ通知。
+        再販は通知しない。ポケカ以外は通知しない
+      - スタートデッキ: 再販でも人気のため常に通知対象（例外）"""
     if not (config.DIGEST_LINE_MINLEN <= len(line) <= 120):
         return False
     if any(mk in line for mk in config.DIGEST_EXCLUDE_MARKERS):
         return False
-    # 定番商品（スターターセット/構築デッキ等）はいつでも定価で買える＝チャンスではない
-    if any(kw in line for kw in config.NOISE_PRODUCT_KEYWORDS):
+    if any(kw in line for kw in config.SUPPLY_NOISE_KEYWORDS):
         return False
+    # スターターセット/構築デッキ系（「スタートデッキ」は別扱いで常に許可）
+    if any(kw in line for kw in config.DECK_PRODUCT_KEYWORDS) and "スタートデッキ" not in line:
+        if not is_pokeca:
+            return False
+        if any(w in line for w in ("再販", "再入荷", "再販売")):
+            return False  # ポケカのデッキ系は初回販売のみ（再販は転売不可）
+        dates = _upcoming_dates(line, today) if today else []
+        if not any(abs((d - today).days) <= config.INITIAL_SALE_WINDOW_DAYS for d in dates):
+            return False  # 発売前後の初回販売期でなければ通知しない
+        return True
     if any(kw in line for kw in config.NOTIFY_ACTION_KEYWORDS):
         return True
     if strict:
@@ -672,6 +704,45 @@ def resolve_store_link(html, line, anchors=None):
     after = [c for c in cands if c[0] >= line_pos]
     chosen = min(after, key=lambda c: c[0]) if after else max(cands, key=lambda c: c[0])
     return chosen[1]
+
+
+def _expired_pokeca_titles(prev, new_state, today):
+    """ポケカ公式APIの商品リストから「発売から1年半超」の商品タイトル（正規化済み）を返す。
+    これらの商品は再販されないため、言及する行を通知から除外する。"""
+    officials = new_state.get("pokecard_official") or prev.get("pokecard_official") or []
+    out = []
+    for key in officials:
+        parts = key.split("|")
+        if len(parts) != 2:
+            continue
+        title, rdate = parts
+        m = re.search(r"(20\d\d)年\s*(\d{1,2})月\s*(\d{1,2})日", rdate)
+        if not m:
+            continue
+        from datetime import date
+        try:
+            released = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            continue
+        if (today - released).days > config.MAX_PRODUCT_AGE_DAYS:
+            nt = _normalize_box_name(title)
+            # 「拡張パック」等のカテゴリ接頭辞を剥がしてコア名で照合できるようにする
+            # （通知行は「超電ブレイカーBOX再販」のようにコア名だけで言及されるため）
+            for pre in ("拡張パックデラックス", "強化拡張パック", "拡張パック",
+                        "ハイクラスパック", "スペシャルカードセット", "スペシャルBOX",
+                        "デッキビルドBOX", "プレミアムトレーナーボックス"):
+                if nt.startswith(pre):
+                    nt = nt[len(pre):]
+                    break
+            if len(nt) >= 5:
+                out.append(nt)
+    return out
+
+
+def _mentions_expired(line, expired_titles):
+    """行が「1年半超で再販の来ない商品」に言及しているか。"""
+    nl = _normalize_box_name(line)
+    return any(t in nl for t in expired_titles)
 
 
 def _item_short_name(item):
@@ -900,6 +971,7 @@ def suggest_watch_candidates(prices, official_titles):
     高値順に返す。official_titles はポケカ公式APIの商品タイトル一覧。"""
     watched = [_normalize_box_name(it["name"]) for it in config.WATCH_ITEMS]
     current = [_normalize_box_name(t) for t in official_titles]
+    # official_titles は「発売から1年半以内」に呼び出し側で絞られている前提
     cands = []
     for name, price in prices.items():
         if not (config.SUGGEST_MIN_PRICE <= price <= config.SUGGEST_MAX_PRICE):
@@ -944,8 +1016,10 @@ def extract_opportunities(prev, new_state, today):
                 continue
             if any(mk in line for mk in config.DIGEST_EXCLUDE_MARKERS):
                 continue
-            if any(kw in line for kw in config.NOISE_PRODUCT_KEYWORDS):
-                continue  # 定番商品（転売妙味なし）
+            if any(kw in line for kw in config.SUPPLY_NOISE_KEYWORDS):
+                continue  # サプライ類（転売妙味なし）
+            if _mentions_expired(line, _expired_pokeca_titles(prev, new_state, today)):
+                continue  # 発売1年半超＝再販の来ない商品
             # 判定①: 近い将来の日付つき。日付が隣の行（テーブルの期間セル）にある構造に
             # 対応するため、次の行まで結合して判定する。
             nxt = lines[i + 1] if i + 1 < len(lines) else ""
@@ -1054,7 +1128,10 @@ def append_heartbeat(prev, new_state, alerts, health):
             first_sugg = not isinstance(sugg_prev, list)
             sugg_seen = list(sugg_prev or [])
             officials = new_state.get("pokecard_official") or prev.get("pokecard_official") or []
-            titles = [k.split("|")[0] for k in officials]
+            # 発売から1年半超の商品は再販が来ないため監視候補にしない
+            expired_t = set(_expired_pokeca_titles(prev, new_state, now_jst.date()))
+            titles = [k.split("|")[0] for k in officials
+                      if _normalize_box_name(k.split("|")[0]) not in expired_t]
             cands = [c for c in suggest_watch_candidates(prices, titles) if c not in set(sugg_seen)]
             cands = cands[: config.SUGGEST_MAX]
             sugg_seen.extend(cands)
@@ -1109,6 +1186,35 @@ def _process_item(item, prev, new_state, alerts, health):
                 print(f"  {item['name']}: 新商品なし（{len(cur_keys)}商品）")
         return
 
+    if item.get("method") == "onepiece_news":
+        # ワンピ公式ニュース: 新着記事の差分で通知（初回は基準記録）
+        articles, ok = fetch_onepiece_news()
+        time.sleep(config.REQUEST_INTERVAL)
+        if not ok:
+            new_state[key] = prev.get(key, [])
+            health["fail"].append((item["name"], item.get("url", "")))
+            print(f"  {item['name']}: 判定不能（前回状態を維持）")
+            return
+        health["ok"].append(item["name"])
+        cur_keys = sorted(articles.keys())
+        new_state[key] = cur_keys
+        prev_keys = prev.get(key, None)
+        if prev_keys is None:
+            print(f"  {item['name']}: 初回・{len(cur_keys)}記事を記録（通知なし）")
+        else:
+            fresh = [k for k in cur_keys if k not in set(prev_keys)]
+            if fresh:
+                names = "、".join(articles[k]["title"][:26] for k in fresh[:5])
+                print(f"  {item['name']}: 新着{len(fresh)}件検知🔔 ← 通知（{names}）")
+                detail_lines = [
+                    f"【{articles[k]['category']}】{articles[k]['title']}（{articles[k]['date'][:10]}）"
+                    for k in fresh[:5]
+                ]
+                alerts.append((item, "ワンピ公式ニュース: " + " ／ ".join(detail_lines), "info"))
+            else:
+                print(f"  {item['name']}: 新着なし（{len(cur_keys)}記事）")
+        return
+
     if item.get("method") == "page_update":
         # 告知ページ: 前回ハッシュと変化したら通知（初回は基準値を保存のみ）
         sig, lines, ok, html = compute_page_signature(item)
@@ -1130,9 +1236,13 @@ def _process_item(item, prev, new_state, alerts, health):
         today_jst = datetime.now(ZoneInfo("Asia/Tokyo")).date()
         anchors = extract_anchors(html)  # 行→リンク照合用（ページごとに1回だけ抽出）
         strict = bool(item.get("strict_actions"))
+        is_pokeca = ("ポケカ" in item["name"]) or ("ポケモン" in item["name"]) or ("pokemon" in item.get("url", ""))
+        expired = _expired_pokeca_titles(prev, new_state, today_jst)
+        def _notable(l):
+            return _is_actionable_line(l, today_jst, strict, is_pokeca) and not _mentions_expired(l, expired)
         links = {}
         for l in lines:
-            if _is_actionable_line(l, today_jst, strict):
+            if _notable(l):
                 url = resolve_store_link(html, l, anchors)
                 if url:
                     links[l] = url
@@ -1146,7 +1256,7 @@ def _process_item(item, prev, new_state, alerts, health):
                 added = [l for l in lines if l not in prev_set]
             # 「実質的な情報の行」だけに絞る。定型文の変化や行の削除だけの更新は
             # 通知しない（=通知が来たら本物、の精度を守る）。
-            actionable = [l for l in added if _is_actionable_line(l, today_jst, strict)]
+            actionable = [l for l in added if _notable(l)]
             if not actionable:
                 print(f"  {item['name']}: 更新あり（実質情報なし・通知抑制。新規{len(added)}行）")
                 return
@@ -1262,6 +1372,18 @@ def run_once():
                 new_state[key] = prev[key]
             print(f"  {item['name']}: 相場選別により除外中（定価割れ連続{drop_counts[key]}回）")
             continue
+
+        # 発売から1年半（MAX_PRODUCT_AGE_DAYS）経過したポケカ商品は再販が来ないため
+        # 監視を自動失効させる（release_date付きアイテムのみ・状態は維持）。
+        rd = item.get("release_date")
+        if rd:
+            from datetime import date
+            age = (datetime.now(ZoneInfo("Asia/Tokyo")).date() - date.fromisoformat(rd)).days
+            if age > config.MAX_PRODUCT_AGE_DAYS:
+                if key in prev:
+                    new_state[key] = prev[key]
+                print(f"  {item['name']}: 発売から1年半経過のため監視対象外（発売日{rd}）")
+                continue
 
         # 1商品の判定で想定外の例外が起きてもパス全体を壊さない（バグ・サイト構造の
         # 急変・不正なレスポンス等）。その商品だけ前回状態を維持して次へ進む。
