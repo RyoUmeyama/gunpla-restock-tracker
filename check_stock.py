@@ -899,7 +899,15 @@ def append_heartbeat(prev, new_state, alerts, health):
     unexpected = [n for n, u in health["fail"] if not _is_expected(u)]
     lines = [f"監視{ok_n + len(health['fail'])}件: 正常{ok_n}件"]
     if expected:
-        lines.append(f"想定内の取得不能{len(expected)}件（nyuka-now系/楽天API未設定）")
+        # 内訳を明記する（「何が・なぜ取れていないのか」が分からないと不安になるため）。
+        exp_rakuten = sum(1 for n, u in health["fail"] if no_rakuten_id and "rakuten" in u)
+        exp_nyuka = sum(1 for n, u in health["fail"] if "nyuka-now" in u)
+        parts = []
+        if exp_rakuten:
+            parts.append(f"楽天API未設定{exp_rakuten}件=ID登録で有効化")
+        if exp_nyuka:
+            parts.append(f"nyuka-nowクラウド遮断{exp_nyuka}件")
+        lines.append(f"想定内の取得不能{len(expected)}件（" + "・".join(parts) + "）")
     if unexpected:
         lines.append(f"⚠要確認の取得不能{len(unexpected)}件: " + "、".join(unexpected[:6]))
     lines.append("このレポートが毎朝届いていればBotは正常稼働しています。")
