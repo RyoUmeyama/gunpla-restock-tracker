@@ -899,10 +899,15 @@ def run_price_screen(prev, new_state):
 
     mode = "自動除外あり" if config.AUTO_DROP_ENABLED else "ログのみ"
     print(f"  --- 相場選別（{mode}）---")
+    from datetime import date
+    today = datetime.now(ZoneInfo("Asia/Tokyo")).date()
     for item in config.WATCH_ITEMS:
         retail = item.get("retail_price", 0)
         if not retail:
             continue
+        rd = item.get("release_date")
+        if rd and (today - date.fromisoformat(rd)).days > config.MAX_PRODUCT_AGE_DAYS:
+            continue  # 発売1年半超は相場評価も不要（監視自体が失効している）
         name = item["name"]
         market = None
         # 相場源: item に price_url(price-base個別記事)があれば他TCGもそこから取る。
@@ -1173,7 +1178,8 @@ def _process_item(item, prev, new_state, alerts, health):
         if prev_keys is None:
             print(f"  {item['name']}: 初回・{len(cur_keys)}商品を記録（通知なし）")
         else:
-            fresh = [k for k in cur_keys if k not in set(prev_keys)]
+            fresh = [k for k in cur_keys if k not in set(prev_keys)
+                     and not any(kw in products[k]["title"] for kw in config.SUPPLY_NOISE_KEYWORDS)]
             if fresh:
                 names = "、".join(products[k]["title"] for k in fresh[:5])
                 print(f"  {item['name']}: 新商品{len(fresh)}件検知🔔 ← 通知（{names}）")
@@ -1202,7 +1208,8 @@ def _process_item(item, prev, new_state, alerts, health):
         if prev_keys is None:
             print(f"  {item['name']}: 初回・{len(cur_keys)}記事を記録（通知なし）")
         else:
-            fresh = [k for k in cur_keys if k not in set(prev_keys)]
+            fresh = [k for k in cur_keys if k not in set(prev_keys)
+                     and not any(kw in articles[k]["title"] for kw in config.SUPPLY_NOISE_KEYWORDS)]
             if fresh:
                 names = "、".join(articles[k]["title"][:26] for k in fresh[:5])
                 print(f"  {item['name']}: 新着{len(fresh)}件検知🔔 ← 通知（{names}）")
@@ -1373,8 +1380,8 @@ def run_once():
             print(f"  {item['name']}: 相場選別により除外中（定価割れ連続{drop_counts[key]}回）")
             continue
 
-        # 発売から1年半（MAX_PRODUCT_AGE_DAYS）経過したポケカ商品は再販が来ないため
-        # 監視を自動失効させる（release_date付きアイテムのみ・状態は維持）。
+        # 発売から1年半（MAX_PRODUCT_AGE_DAYS）経過した商品は追わない（全商品共通規則・
+        # 2026-07-10ユーザー指示）。release_date付きアイテムは自動失効する（状態は維持）。
         rd = item.get("release_date")
         if rd:
             from datetime import date

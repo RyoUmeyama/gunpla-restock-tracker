@@ -25,6 +25,7 @@ WATCH_ITEMS = [
         "method": "toei_stock_status",
         "url": "https://store.toei-anim.co.jp/shop/g/gONP03841O1/",
         "retail_price": 5280,
+        "release_date": "2026-05-30",  # 発売日（1年半で自動失効・全商品共通規則）
         "key": "op16_kessen",
     },
     {
@@ -34,6 +35,7 @@ WATCH_ITEMS = [
         "method": "page_update",
         "url": "https://anime-matsuri.com/onepiececard-kessennokoku-op16-reservation-lottery/",
         "retail_price": 5280,
+        "release_date": "2026-05-30",  # 発売日（1年半で自動失効・全商品共通規則）
         "key": "op16_restock_news",
     },
     # ===== 2026-06-22 多数監視に拡張（docs/10_multi_watch_sources.md で実地検証）=====
@@ -48,6 +50,7 @@ WATCH_ITEMS = [
         "method": "toei_stock_status",
         "url": "https://store.toei-anim.co.jp/shop/g/gDBS00124O1/",
         "retail_price": 7920,
+        "release_date": "2025-11-08",  # 発売日（1年半で自動失効・全商品共通規則）
         "key": "dbfw_sb02_stock",
     },
     {
@@ -55,6 +58,7 @@ WATCH_ITEMS = [
         "method": "toei_stock_status",
         "url": "https://store.toei-anim.co.jp/shop/g/gDBS00120O1/",
         "retail_price": 7920,
+        "release_date": "2025-06-28",  # 発売日（1年半で自動失効・全商品共通規則）
         "key": "dbfw_sb01_stock",
     },
     {
@@ -64,6 +68,7 @@ WATCH_ITEMS = [
         "url": "https://store.toei-anim.co.jp/shop/g/gONP01938O1/",
         "retail_price": 5280,
         "price_url": "https://price-base.com/useful/ouzokunokettou-box-market",
+        "release_date": "2024-11-30",  # 発売日（1年半で自動失効・全商品共通規則）
         "key": "onepiece_op10_stock",
     },
     {
@@ -71,6 +76,7 @@ WATCH_ITEMS = [
         "method": "toei_stock_status",
         "url": "https://store.toei-anim.co.jp/shop/g/gONP03128O1/",
         "retail_price": 5280,
+        "release_date": "2026-02-28",  # 発売日（1年半で自動失効・全商品共通規則）
         "key": "onepiece_op15_stock",
     },
     # --- 楽天ブックス在庫（公式API・要RAKUTEN_APP_ID）---
@@ -119,6 +125,7 @@ WATCH_ITEMS = [
         "keyword": "ワンピースカードゲーム 世界最強の戦士 BOX",
         "url": "https://books.rakuten.co.jp/",
         "retail_price": 5280,
+        "release_date": "2026-08-22",  # 発売日（1年半で自動失効・全商品共通規則）
         "key": "rakuten_op17",
     },
     {
@@ -227,6 +234,7 @@ WATCH_ITEMS = [
         "method": "page_update",
         "url": "https://anime-matsuri.com/onepiececard-sekaisaikyonosenshi-op17-reservation-lottery/",
         "retail_price": 5280,
+        "release_date": "2026-08-22",  # 発売日（1年半で自動失効・全商品共通規則）
         "key": "onepiece_op17_am",
     },
     # --- 2026-07-07 相場データ駆動の監視拡大 ---
@@ -325,7 +333,7 @@ WATCH_ITEMS = [
     #   ※ポケカ3ページ(テラスタル/ホワイトフレア/ブラックボルト)はanime-matsuri版と
     #     完全重複のため2026-07-08に削除（クラウドでは常時取得不能だった）。
     {
-        "name": "DBFW CROSS FORCE FB10 再販集約",
+        "name": "DBFW 在庫・再販集約（横断）",
         "method": "page_update",
         "url": "https://nyuka-now.com/archives/140408",
         "retail_price": 5280,
@@ -339,6 +347,7 @@ WATCH_ITEMS = [
         "url": "https://nyuka-now.com/archives/151955",
         "retail_price": 7920,
         "price_url": "https://price-base.com/useful/mangabooster01-box-market",
+        "release_date": "2025-06-28",  # 発売日（1年半で自動失効・全商品共通規則）
         "key": "dbfw_sb01_news",
     },
     {
@@ -351,14 +360,14 @@ WATCH_ITEMS = [
         "key": "onepiece_cross_news",
     },
     {
-        "name": "遊戯王 WPP7 再販集約",
+        "name": "遊戯王 在庫・再販集約（横断）",
         "method": "page_update",
         "url": "https://nyuka-now.com/archives/24047",
         "retail_price": 2970,
         "key": "yugioh_wpp7_news",
     },
     {
-        "name": "遊戯王 RARITY COLLECTION RC04 再販集約",
+        "name": "遊戯王 レアコレシリーズ 再販集約",
         "method": "page_update",
         "url": "https://nyuka-now.com/archives/134935",
         "retail_price": 5280,
@@ -501,9 +510,12 @@ FEED_URLS = [
     "https://nyuka-now.com/archives/category/instock/feed",
 ]
 # 発見対象キーワード。ポケカは別格＝関連語を広く。
+# カードゲーム商品限定（素の「ワンピース」「ドラゴンボール」「名探偵コナン」は
+# フィギュア・マンガ等のカード以外も拾ってしまうため使わない。2026-07-10）
 WATCH_KEYWORDS = [
-    "ポケモンカード", "ポケカ", "ワンピースカード", "ワンピース",
-    "遊戯王", "ドラゴンボール", "DBFW", "フュージョンワールド", "名探偵コナン",
+    "ポケモンカード", "ポケカ", "ワンピースカード", "ワンピカード",
+    "遊戯王", "ドラゴンボールスーパーカード", "DBFW", "フュージョンワールド",
+    "名探偵コナンTCG", "コナンTCG", "コナンカード",
 ]
 # ポケカ判定語（これを含むタイトルは別格＝除外フィルタをかけず広く拾う）
 POKECA_TITLE_KEYWORDS = ["ポケモンカード", "ポケカ", "ポケモン"]
