@@ -575,11 +575,67 @@ def _is_actionable_line(line, today=None):
     return False
 
 
-def resolve_store_link(html, line):
-    """追加行 line の近傍にあるストアへの外部リンクをHTMLから探して返す（無ければNone）。
-    「通知を見てもどのサイトに行けばいいか分からない」問題への対策:
-    集約ページ上で行の周辺にある遷移先URL（Amazon/楽天/ヨドバシ等）をそのまま通知に載せる。"""
+def _norm_link_text(t):
+    """アンカーテキスト照合用の正規化（タグ・エンティティ・空白を除去）。"""
+    t = re.sub(r"<[^>]+>", "", t)
+    t = re.sub(r"&[a-z]+;|&#\d+;", " ", t)
+    return re.sub(r"\s+", "", t)
+
+
+def _clean_store_url(href):
+    """hrefのHTMLエンティティを復元→アフィリエイト剥がし→ストアドメイン確認。
+    ストアドメインでなければ None。"""
+    href = href.replace("&amp;", "&").replace("&#038;", "&")
+    real = _unwrap_affiliate(href)
+    if "anime-matsuri.com" in real or "nyuka-now.com" in real:
+        return None
+    if any(d in real for d in config.STORE_DOMAINS):
+        return real
+    return None
+
+
+def extract_anchors(html):
+    """ページ内の <a href>text</a> を (正規化テキスト, href) のリストで返す。
+    行→リンクの確実な対応付け（アンカーテキスト一致）に使う。"""
+    anchors = []
     if not html:
+        return anchors
+    for m in re.finditer(r'<a\s[^>]*?href="(https?://[^"]+?)"[^>]*?>(.*?)</a>', html, re.S | re.I):
+        text = _norm_link_text(m.group(2))
+        if len(text) >= 10:
+            anchors.append((text, m.group(1)))
+    return anchors
+
+
+def resolve_store_link(html, line, anchors=None):
+    """追加行 line に対応する遷移先ストアURLを返す。
+    「実際のページでは関係ないものが表示される」誤リンク事故を防ぐため、
+    **確実に対応関係が取れる場合だけ**URLを返す（推測で近傍リンクを拾わない）:
+      ① 行がリンクのアンカーテキストそのもの（集約ページの商品名リンク）→ そのhref
+      ② 行が店舗名を含む → 行の近傍でドメインが店舗名と一致するリンクのみ
+    どちらでもなければ None（URLなしで通知。集約ページのURLは従来どおり載る）。"""
+    if not html:
+        return None
+    # ① アンカーテキスト一致（最も確実: その行はリンクの文字列そのもの）
+    if anchors is None:
+        anchors = extract_anchors(html)
+    nl = _norm_link_text(line)
+    if len(nl) >= 15:
+        for na, href in anchors:
+            # 完全包含のみ採用（先頭一致では同一シリーズの別商品に交差マッチするため。
+            # 例: METAL ROBOT魂＜SIDE MS＞... は先頭が全商品共通）。
+            # 「行 ⊆ アンカー」はアンカーが商品名＋（価格：...）等の装飾付きのケース。
+            if len(na) >= 15 and (nl in na or na in nl):
+                real = _clean_store_url(href)
+                if real:
+                    return real
+    # ② 店舗名ヒント一致（行が「Amazonで抽選受付」等の場合のみ・ドメイン一致必須）
+    hint_domains = None
+    for name, domains in config.STORE_NAME_HINTS.items():
+        if name in line:
+            hint_domains = domains
+            break
+    if not hint_domains:
         return None
     idx = -1
     for probe_len in (18, 10, 6):
@@ -592,28 +648,13 @@ def resolve_store_link(html, line):
         return None
     win_start = max(0, idx - 1500)
     window = html[win_start: idx + 1500]
-    # ウィンドウ内のストアドメインのリンクだけを候補にする（フォーム/SNS等のノイズは不採用）
     cands = []  # (ウィンドウ内位置, 実URL)
     for m in re.finditer(r'href="(https?://[^"]+?)"', window):
-        # HTML内のhrefは&が&amp;にエスケープされており、そのままだとparse_qsが
-        # パラメータ名を「amp;url」と誤認してアフィリエイト剥がしに失敗する（実バグ対応）
-        href = m.group(1).replace("&amp;", "&").replace("&#038;", "&")
-        real = _unwrap_affiliate(href)
-        if "anime-matsuri.com" in real or "nyuka-now.com" in real:
-            continue
-        if any(d in real for d in config.STORE_DOMAINS):
+        real = _clean_store_url(m.group(1))
+        if real and any(d in real for d in hint_domains):
             cands.append((m.start(), real))
     if not cands:
-        return None
-    # 行に店舗名があれば、ドメインが一致するリンクだけを採用（隣の行のリンク誤拾い防止）
-    for name, domains in config.STORE_NAME_HINTS.items():
-        if name in line:
-            matched = [c for c in cands if any(d in c[1] for d in domains)]
-            if matched:
-                cands = matched
-            else:
-                return None  # 店舗名は分かるのに一致リンクが無い→誤リンクを載せない
-            break
+        return None  # 店舗名は分かるのに一致リンクが無い→誤リンクを載せない
     # 行の位置(ウィンドウ内では1500付近)より後ろにあるリンクを優先（表は「行→リンク」の順）
     line_pos = idx - win_start
     after = [c for c in cands if c[0] >= line_pos]
@@ -1028,10 +1069,11 @@ def _process_item(item, prev, new_state, alerts, health):
         prev_sig = prev_val.get("sig") if isinstance(prev_val, dict) else prev_val
         prev_lines = prev_val.get("lines") if isinstance(prev_val, dict) else None
         today_jst = datetime.now(ZoneInfo("Asia/Tokyo")).date()
+        anchors = extract_anchors(html)  # 行→リンク照合用（ページごとに1回だけ抽出）
         links = {}
         for l in lines:
             if _is_actionable_line(l, today_jst):
-                url = resolve_store_link(html, l)
+                url = resolve_store_link(html, l, anchors)
                 if url:
                     links[l] = url
         new_state[key] = {"sig": sig, "lines": lines, "links": links}
