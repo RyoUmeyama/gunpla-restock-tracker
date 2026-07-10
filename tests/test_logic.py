@@ -297,10 +297,35 @@ class TestActionableLine(unittest.TestCase):
         self.assertFalse(cs._is_actionable_line("新カードのイラストが公開されました"))
 
 
-    def test_upcoming_date_line_actionable(self):
-        # 行動語が無くても近い将来の日付を含む行（受付期間の更新）は実質情報
+    def test_bare_date_line_not_actionable(self):
+        # 日付だけで中身のない行（日付セル・期間セル単独）は通知しない
+        # （「2026.7.10 →検索:amazon...k=2026.7.10」という無意味通知の回帰テスト）
         from datetime import date
-        self.assertTrue(cs._is_actionable_line("2026年7月15日〜7月22日", date(2026, 7, 8)))
+        self.assertFalse(cs._is_actionable_line("2026年7月15日〜7月22日", date(2026, 7, 8)))
+        self.assertFalse(cs._is_actionable_line("2026.7.10", date(2026, 7, 8)))
+
+    def test_date_with_substance_actionable(self):
+        # 日付＋商品名など中身のある行は行動語が無くても実質情報
+        from datetime import date
+        self.assertTrue(cs._is_actionable_line(
+            "拡張パック ストームエメラルダ BOXが 7月31日（金）に登場", date(2026, 7, 8)))
+
+    def test_noise_product_excluded(self):
+        # 定番商品（スターターセット/構築デッキ等）は行動語や日付があっても通知しない
+        # （「スターターセットex発売告知」メールの回帰テスト）
+        from datetime import date
+        self.assertFalse(cs._is_actionable_line(
+            "構築デッキ「スターターセットex」3種が、7月31日（金）に発売！", date(2026, 7, 8)))
+        self.assertFalse(cs._is_actionable_line(
+            "スタートデッキ100の再販が決定", date(2026, 7, 8)))
+
+    def test_strict_mode_requires_action_keyword(self):
+        # ニュース一覧ページ(strict)は行動語必須。発売告知だけの行は通知しない
+        from datetime import date
+        self.assertFalse(cs._is_actionable_line(
+            "拡張パック ムニキスゼロが 7月31日（金）に登場", date(2026, 7, 8), strict=True))
+        self.assertTrue(cs._is_actionable_line(
+            "拡張パック ムニキスゼロの抽選販売を受付", date(2026, 7, 8), strict=True))
 
     def test_stale_date_line_not_actionable(self):
         from datetime import date
@@ -330,6 +355,23 @@ class TestFallbackSearchUrl(unittest.TestCase):
         url = cs.fallback_search_url("抽選販売応募受け付け期間", self.ITEM)
         self.assertIn("amazon.co.jp/s?k=", url)
         from urllib.parse import unquote
+        self.assertIn("アビスアイ", unquote(url))
+
+    def test_query_strips_dot_dates_and_brackets(self):
+        # 「2026.7.10」検索や「」・句読点・助詞のゴミが残らないこと（回帰テスト）
+        from urllib.parse import unquote
+        url = cs.fallback_search_url(
+            "構築デッキ「スターターセットex」3種が、7月31日（金）に発売！", self.ITEM)
+        q = unquote(url.split("k=")[1])
+        self.assertNotIn("2026", q)
+        self.assertNotIn("「", q)
+        self.assertNotIn("、", q)
+        self.assertNotIn("発売", q)
+        self.assertIn("スターターセットex", q)
+
+    def test_bare_dot_date_uses_item_name(self):
+        from urllib.parse import unquote
+        url = cs.fallback_search_url("2026.7.10", self.ITEM)
         self.assertIn("アビスアイ", unquote(url))
 
 

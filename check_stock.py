@@ -557,21 +557,33 @@ def _unwrap_affiliate(url):
     return url
 
 
-def _is_actionable_line(line, today=None):
+def _is_actionable_line(line, today=None, strict=False):
     """追加行が「通知する価値のある実質情報」か判定する。
     (1)再販/入荷/抽選/予約等の行動語を含む、または
-    (2)近い将来の日付を含む（受付期間の行だけが更新されるケース。行動語が無くても
-       締切変更・新規期間の追加は行動情報なので抑制しない）
-    かつ、定型文・ナビ断片でないこと。"""
+    (2)近い将来の日付＋日付以外の中身を含む（strict=Falseの場合のみ。
+       ニュース一覧ページは strict=True で行動語必須＝発売告知だけでは通知しない）
+    かつ、定型文・ナビ断片・定番商品カテゴリ（転売妙味なし）でないこと。"""
     if not (config.DIGEST_LINE_MINLEN <= len(line) <= 120):
         return False
     if any(mk in line for mk in config.DIGEST_EXCLUDE_MARKERS):
         return False
+    # 定番商品（スターターセット/構築デッキ等）はいつでも定価で買える＝チャンスではない
+    if any(kw in line for kw in config.NOISE_PRODUCT_KEYWORDS):
+        return False
     if any(kw in line for kw in config.NOTIFY_ACTION_KEYWORDS):
         return True
+    if strict:
+        return False
     if today is not None:
         dates = _upcoming_dates(line, today)
-        return any(0 <= (d - today).days <= config.OPPORTUNITY_WINDOW_DAYS for d in dates)
+        if any(0 <= (d - today).days <= config.OPPORTUNITY_WINDOW_DAYS for d in dates):
+            # 日付以外の中身があること（「2026.7.10」のような日付セル単独の行は
+            # 情報ゼロなので通知しない。中身は隣の題名行が別途拾われる）
+            residue = re.sub(
+                r"20\d\d[年./]\s*\d{1,2}[月./]\s*\d{1,2}日?|\d{1,2}月\s*\d{1,2}日"
+                r"|[〜~（）()（）\s、。・!！?？-]",
+                "", line)
+            return len(residue) >= 8
     return False
 
 
@@ -686,11 +698,16 @@ def fallback_search_url(line, item):
             break
     q = line
     q = re.sub(r"【[^】]*】", " ", q)                      # 店舗タグ等
-    q = re.sub(r"20\d\d年\s*\d{1,2}月\s*\d{1,2}日|\d{1,2}月\s*\d{1,2}日", " ", q)  # 日付
+    # 日付は全形式除去（2026年7月10日 / 2026.7.10 / 2026/7/10 / 7月10日）
+    q = re.sub(r"20\d\d[年./]\s*\d{1,2}[月./]\s*\d{1,2}日?|\d{1,2}月\s*\d{1,2}日", " ", q)
     q = re.sub(r"[（(].*?[)）]", " ", q)                   # 括弧注記
+    q = q.replace("「", " ").replace("」", " ").replace("『", " ").replace("』", " ")
     for w in ("再販", "入荷", "抽選", "予約", "受付中", "受付", "先着", "販売開始", "販売",
-              "在庫", "応募", "開始", "期間", "情報", "まとめ", "〜", "～"):
+              "発売", "在庫", "応募", "開始", "期間", "情報", "まとめ", "〜", "～"):
         q = q.replace(w, " ")
+    q = re.sub(r"[、。．！!？?・]", " ", q)                # 句読点・記号
+    q = re.sub(r"\s(が|を|に|は|で|の|と)\s", " ", " " + q + " ")  # 浮いた助詞
+    q = re.sub(r"(?<=[ぁ-んァ-ヶ一-龯A-Za-z0-9])(が|を|は|に|で)(?=\s|$)", "", q)  # 語末の助詞（「3種が」→「3種」）
     q = re.sub(r"\s+", " ", q).strip()
     if len(q) < 8:  # 行から商品名が取れない（期間行など）→ 監視対象の商品名で検索
         q = _item_short_name(item)
@@ -927,6 +944,8 @@ def extract_opportunities(prev, new_state, today):
                 continue
             if any(mk in line for mk in config.DIGEST_EXCLUDE_MARKERS):
                 continue
+            if any(kw in line for kw in config.NOISE_PRODUCT_KEYWORDS):
+                continue  # 定番商品（転売妙味なし）
             # 判定①: 近い将来の日付つき。日付が隣の行（テーブルの期間セル）にある構造に
             # 対応するため、次の行まで結合して判定する。
             nxt = lines[i + 1] if i + 1 < len(lines) else ""
@@ -1110,9 +1129,10 @@ def _process_item(item, prev, new_state, alerts, health):
         prev_lines = prev_val.get("lines") if isinstance(prev_val, dict) else None
         today_jst = datetime.now(ZoneInfo("Asia/Tokyo")).date()
         anchors = extract_anchors(html)  # 行→リンク照合用（ページごとに1回だけ抽出）
+        strict = bool(item.get("strict_actions"))
         links = {}
         for l in lines:
-            if _is_actionable_line(l, today_jst):
+            if _is_actionable_line(l, today_jst, strict):
                 url = resolve_store_link(html, l, anchors)
                 if url:
                     links[l] = url
@@ -1126,19 +1146,13 @@ def _process_item(item, prev, new_state, alerts, health):
                 added = [l for l in lines if l not in prev_set]
             # 「実質的な情報の行」だけに絞る。定型文の変化や行の削除だけの更新は
             # 通知しない（=通知が来たら本物、の精度を守る）。
-            actionable = [l for l in added if _is_actionable_line(l, today_jst)]
+            actionable = [l for l in added if _is_actionable_line(l, today_jst, strict)]
             if not actionable:
                 print(f"  {item['name']}: 更新あり（実質情報なし・通知抑制。新規{len(added)}行）")
                 return
             shown = []
             for l in actionable[: config.DIFF_LINES_SHOWN]:
                 entry = l[: config.DIFF_LINE_MAXLEN]
-                # 日付だけで通った行（行動語なし）は、単体では何の日付か分からないため
-                # ページ内の直前の行（商品名/店舗名）を文脈として前置する。
-                if not any(kw in l for kw in config.NOTIFY_ACTION_KEYWORDS):
-                    li = lines.index(l) if l in lines else -1
-                    if li > 0:
-                        entry = f"{lines[li - 1][:30]}＞{entry}"
                 if links.get(l):
                     entry += f" →{links[l]}"  # 確実な直リンク
                 else:
