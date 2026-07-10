@@ -310,5 +310,28 @@ class TestActionableLine(unittest.TestCase):
         self.assertFalse(cs._is_actionable_line("再販"))
 
 
+class TestFallbackSearchUrl(unittest.TestCase):
+    """検索URLフォールバック: 集約ページ頼みにしない通知の要。"""
+
+    ITEM = {"name": "ポケカ アビスアイ 抽選/再販まとめ（anime-matsuri）"}
+
+    def test_product_line_to_amazon_search(self):
+        url = cs.fallback_search_url(
+            "ROBOT魂 ＜SIDE MS＞ 機動戦士ガンダムSEED ストライクガンダム (再販版）", self.ITEM)
+        self.assertIn("amazon.co.jp/s?k=", url)
+        self.assertIn("ROBOT", url)
+        self.assertNotIn("%E5%86%8D%E8%B2%A9", url)  # 「再販」はクエリから除去
+
+    def test_store_hint_selects_store_search(self):
+        url = cs.fallback_search_url("ヨドバシで7月20日から抽選受付", self.ITEM)
+        self.assertIn("yodobashi.com", url)
+
+    def test_short_line_uses_item_name(self):
+        url = cs.fallback_search_url("抽選販売応募受け付け期間", self.ITEM)
+        self.assertIn("amazon.co.jp/s?k=", url)
+        from urllib.parse import unquote
+        self.assertIn("アビスアイ", unquote(url))
+
+
 if __name__ == "__main__":
     unittest.main()
