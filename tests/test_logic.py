@@ -264,6 +264,22 @@ class TestStoreLinkResolution(unittest.TestCase):
         link = cs.resolve_store_link(html, "【楽天ブックス】7月20日 再販予約")
         self.assertEqual(link, "https://books.rakuten.co.jp/rb/999/")
 
+
+    def test_anchor_text_exact_match(self):
+        # 行がリンクのアンカーテキストそのもの → そのhrefを確実に対応付ける
+        html = ('<a href="https://www.amazon.co.jp/dp/AAA111/">'
+                'ROBOT魂 ストライクガンダム ver. A.N.I.M.E. (再販版）</a>'
+                '<a href="https://www.amazon.co.jp/dp/BBB222/">別商品 ガンダムリバティ</a>')
+        link = cs.resolve_store_link(html, "ROBOT魂 ストライクガンダム ver. A.N.I.M.E. (再販版）")
+        self.assertEqual(link, "https://www.amazon.co.jp/dp/AAA111/")
+
+    def test_no_guess_from_neighbor_link(self):
+        # 店舗名もアンカー一致もない行は、近くに他商品のリンクがあってもURLを付けない
+        # （「実際のページでは関係ないものが表示される」誤リンク事故の回帰テスト）
+        html = ('<p>HGUC 新商品 7月20日 再販予定</p>'
+                '<a href="https://www.amazon.co.jp/dp/CCC333/">全く別の商品名リンク</a>')
+        self.assertIsNone(cs.resolve_store_link(html, "HGUC 新商品 7月20日 再販予定"))
+
     def test_resolve_none_when_not_found(self):
         self.assertIsNone(cs.resolve_store_link("<p>無関係</p>", "【ヨドバシ】7月10日 抽選受付"))
 
