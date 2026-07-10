@@ -16,13 +16,8 @@
 
 # 監視対象。各品に method（判定方式）・url・表示名・定価を持たせる。
 WATCH_ITEMS = [
-    {
-        "name": "HG 1/144 ナイチンゲール",
-        "method": "gdb_soldout",
-        "url": "https://gunpla-database.doc-sin.life/?no=2294",
-        "retail_price": 7700,
-        "key": "gunpla_nightingale",
-    },
+    # ※ガンプラ監視（HGナイチンゲール/ガンプラ横断集約）は2026-07-10にユーザー指示で
+    #   通知対象から除外。戦略の主軸はTCG（ポケカ別格）のため。
     {
         # 網羅スクリーニング(docs/08)の本命。唯一 入手容易さ=medium。
         # 東映アニメ公式の正規・定価¥5,280ルートを監視。stock_status で在庫判定。
@@ -345,13 +340,6 @@ WATCH_ITEMS = [
         "price_url": "https://price-base.com/useful/shippunokirameki-box-market",
         "key": "conan_tcg_news",
     },
-    {
-        "name": "ガンプラ 在庫・再販集約（プレバン/人気品横断）",
-        "method": "page_update",
-        "url": "https://nyuka-now.com/archives/6830",
-        "retail_price": 0,
-        "key": "gunpla_news",
-    },
     # ===== Phase1（2026-06-22 動的追従 docs/11）=====
     # --- ポケカ別格: 公式API 新弾検知（新商品が出たら通知＋将来は監視候補化）---
     {
@@ -405,6 +393,29 @@ STORE_DOMAINS = [
     "biccamera", "yamada", "7net", "omni7", "hmv", "tsutaya", "store.toei-anim",
     "pokemon", "hobby", "joshin", "edion", "lawson", "aeon", "toysrus", "surugaya",
 ]
+# 確実な直リンクが取れない行に付ける「ストア検索URL」のテンプレート。
+# 集約ページのURLだけでは行動につながらないため、商品名での検索結果に直接飛ばす。
+# 行に店舗名があればそのストアの検索、なければAmazon検索を既定にする。
+SEARCH_URL_TEMPLATES = {
+    "amazon": "https://www.amazon.co.jp/s?k={q}",
+    "rakuten": "https://search.rakuten.co.jp/search/mall/{q}/",
+    "yodobashi": "https://www.yodobashi.com/?word={q}",
+    "pokemoncenter": "https://www.pokemoncenter-online.com/search/?q={q}",
+    "amiami": "https://www.amiami.jp/top/search/list?s_keywords={q}",
+    "animate": "https://www.animate-onlineshop.jp/products/list.php?mode=search&smt={q}",
+    "surugaya": "https://www.suruga-ya.jp/search?search_word={q}",
+}
+# 店舗名ヒント→検索テンプレートのキー
+STORE_SEARCH_KEY = {
+    "Amazon": "amazon", "アマゾン": "amazon", "楽天": "rakuten", "ヨドバシ": "yodobashi",
+    "ポケモンセンター": "pokemoncenter", "ポケセン": "pokemoncenter",
+    "あみあみ": "amiami", "アニメイト": "animate", "駿河屋": "surugaya",
+}
+
+# 東映在庫スイープで「×からの変化」でも在庫復活とみなさない値（誤報ガード）。
+# 例: ×→販売終了 は入荷ではない。
+TOEI_SWEEP_IGNORE = ["終了", "未定", "取扱なし", "取り扱いなし"]
+
 # 行内の店舗名→URLドメインの対応。行に店舗名があるときはドメインが一致するリンクだけを
 # 採用する（隣の行のリンクを誤って拾う「ズレ」の防止）。
 STORE_NAME_HINTS = {
@@ -419,7 +430,7 @@ STORE_NAME_HINTS = {
 }
 PAGE_LINES_KEEP = 400    # stateに保存する行数上限
 DIFF_LINES_SHOWN = 6     # 通知本文に載せる新規行の最大数
-DIFF_LINE_MAXLEN = 70    # 1行の最大表示文字数
+DIFF_LINE_MAXLEN = 90    # 1行の最大表示文字数（単語の途中で切れにくいよう拡大）
 
 # --- pokecard_official_list 方式（ポケカ公式API 新弾検知）の設定 ---
 # resultAPI.php の4カテゴリ。新弾は (productTitle, releaseDate) のセット差分で検知する。

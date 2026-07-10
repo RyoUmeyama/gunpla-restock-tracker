@@ -662,6 +662,42 @@ def resolve_store_link(html, line, anchors=None):
     return chosen[1]
 
 
+def _item_short_name(item):
+    """監視名から商品コア名を取り出す（検索クエリ・ダイジェスト表示用）。"""
+    short = item.get("name", "")
+    for w in (" 抽選/再販まとめ（anime-matsuri）", " 抽選/予約まとめ（anime-matsuri）",
+              " 再販告知まとめ（anime-matsuri）", " 再販集約", "（横断）", "（在庫）",
+              "（楽天ブックス）", "（東映ストア）"):
+        short = short.replace(w, "")
+    return short.strip()
+
+
+def fallback_search_url(line, item):
+    """確実な直リンクが無い行に付ける「ストア検索URL」を作る。
+    集約ページのURLだけでは『結局どこで買えるのか』が分からないため、
+    商品名でのストア検索結果へ直接飛ばす。行に店舗名があればそのストアの検索、
+    なければAmazon検索。クエリは行から日付・記号・店舗タグを除いた商品名部分
+    （短すぎる行は監視対象の商品名を使う）。"""
+    from urllib.parse import quote
+    tpl_key = "amazon"
+    for name, key in config.STORE_SEARCH_KEY.items():
+        if name in line:
+            tpl_key = key
+            break
+    q = line
+    q = re.sub(r"【[^】]*】", " ", q)                      # 店舗タグ等
+    q = re.sub(r"20\d\d年\s*\d{1,2}月\s*\d{1,2}日|\d{1,2}月\s*\d{1,2}日", " ", q)  # 日付
+    q = re.sub(r"[（(].*?[)）]", " ", q)                   # 括弧注記
+    for w in ("再販", "入荷", "抽選", "予約", "受付中", "受付", "先着", "販売開始", "販売",
+              "在庫", "応募", "開始", "期間", "情報", "まとめ", "〜", "～"):
+        q = q.replace(w, " ")
+    q = re.sub(r"\s+", " ", q).strip()
+    if len(q) < 8:  # 行から商品名が取れない（期間行など）→ 監視対象の商品名で検索
+        q = _item_short_name(item)
+    q = q[:40]
+    return config.SEARCH_URL_TEMPLATES[tpl_key].format(q=quote(q))
+
+
 def load_state():
     if os.path.exists(config.STATE_FILE):
         try:
@@ -746,6 +782,8 @@ def run_discovery(prev, new_state, alerts):
             b for g, b in boxes.items()
             if (toei_known.get(g) or {}).get("stockMsg") == "×"
             and (b.get("stockMsg") or "×") != "×"
+            # ×→「販売終了」等は入荷ではないので在庫復活として通知しない（誤報ガード）
+            and not any(w in (b.get("stockMsg") or "") for w in config.TOEI_SWEEP_IGNORE)
         ]
         if restocked:
             names = "、".join(b["name"][:30] for b in restocked[:5])
@@ -911,7 +949,9 @@ def extract_opportunities(prev, new_state, today):
             seen.add(text)
             entry = f"[{short}] {text[:90]}"
             if links.get(line):
-                entry += f" →{links[line]}"  # 遷移先ストアURL
+                entry += f" →{links[line]}"  # 確実な直リンク
+            else:
+                entry += f" →検索:{fallback_search_url(line, item)}"
             out.append(entry)
             if len(out) >= config.DIGEST_MAX_LINES:
                 return out
@@ -1093,8 +1133,18 @@ def _process_item(item, prev, new_state, alerts, health):
             shown = []
             for l in actionable[: config.DIFF_LINES_SHOWN]:
                 entry = l[: config.DIFF_LINE_MAXLEN]
+                # 日付だけで通った行（行動語なし）は、単体では何の日付か分からないため
+                # ページ内の直前の行（商品名/店舗名）を文脈として前置する。
+                if not any(kw in l for kw in config.NOTIFY_ACTION_KEYWORDS):
+                    li = lines.index(l) if l in lines else -1
+                    if li > 0:
+                        entry = f"{lines[li - 1][:30]}＞{entry}"
                 if links.get(l):
-                    entry += f" →{links[l]}"  # 遷移先ストアURL（どのサイトに行けばいいか）
+                    entry += f" →{links[l]}"  # 確実な直リンク
+                else:
+                    # 直リンクが確実に取れない場合はストア検索URL（商品名入り）を付ける。
+                    # 集約ページのURLだけでは行動につながらないため。
+                    entry += f" →検索:{fallback_search_url(l, item)}"
                 shown.append(entry)
             more = f" …ほか{len(actionable) - len(shown)}行" if len(actionable) > len(shown) else ""
             detail = f"更新検知・新規{len(actionable)}行: " + " ／ ".join(shown) + more
@@ -1206,6 +1256,8 @@ def run_once():
         except Exception as e:
             if key in prev:
                 new_state[key] = prev[key]
+            if item["name"] in health["ok"]:  # 判定成功後の例外で二重計上しない
+                health["ok"].remove(item["name"])
             health["fail"].append((item["name"], item.get("url", "")))
             print(f"  ⚠ {item['name']}: 想定外エラーで判定不能（前回状態を維持）: {e}")
 
