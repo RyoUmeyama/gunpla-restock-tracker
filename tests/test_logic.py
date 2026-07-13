@@ -401,5 +401,37 @@ class TestFallbackSearchUrl(unittest.TestCase):
         self.assertIn("アビスアイ", unquote(url))
 
 
+class TestConfigGuards(unittest.TestCase):
+    """設定の整合性ガード: 追加時の付け忘れをCIで検出する。"""
+
+    def test_single_product_items_have_release_date(self):
+        # 単一商品の監視には必ず release_date（1年半自動失効・全商品共通規則）
+        missing = []
+        for it in cs.config.WATCH_ITEMS:
+            m = it.get("method")
+            single = (m in ("toei_stock_status", "rakuten_books")) or \
+                     (m == "page_update" and "reservation-lottery" in it.get("url", ""))
+            if single and not it.get("release_date"):
+                missing.append(it["key"])
+        self.assertEqual(missing, [], f"release_date未設定: {missing}")
+
+
+class TestToeiSweepAgeRule(unittest.TestCase):
+    """東映在庫スイープの1年半ルール。"""
+
+    def test_old_box_not_notified(self):
+        from datetime import date
+        today = date(2026, 7, 13)
+        boxes = {
+            "OLD": {"name": "OP-06 双璧の覇者", "stockMsg": "○", "releaseDt": "2023/11/25"},
+            "NEW": {"name": "OP-16 決戦の刻", "stockMsg": "○", "releaseDt": "2026/05/30"},
+            "END": {"name": "OP-05", "stockMsg": "販売終了", "releaseDt": "2026/05/30"},
+        }
+        known = {g: {"stockMsg": "×"} for g in boxes}
+        notify, old_only = cs._sweep_restocked(boxes, known, today)
+        self.assertEqual([b["name"] for b in notify], ["OP-16 決戦の刻"])
+        self.assertEqual([b["name"] for b in old_only], ["OP-06 双璧の覇者"])
+
+
 if __name__ == "__main__":
     unittest.main()
