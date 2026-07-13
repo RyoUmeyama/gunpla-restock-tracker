@@ -395,6 +395,7 @@ def discover_toei_new_boxes():
                     "price": price,
                     "url": f"https://store.toei-anim.co.jp/shop/g/g{goods}/",
                     "stockMsg": it.get("stockMsg", ""),
+                    "releaseDt": (it.get("releaseDt") or "")[:10],  # "2024/07/16" 形式
                 }
             time.sleep(config.REQUEST_INTERVAL)
         except Exception as e:
@@ -577,6 +578,26 @@ def _unwrap_affiliate(url):
     return url
 
 
+def _deck_supply_rule(line, is_pokeca, today):
+    """商品ライフサイクル規則（サプライ/デッキ系）を適用する。
+    返り値: (excluded, forced)。excluded=True なら通知対象外。
+    forced=True はポケカのデッキ系初回販売（明示的に通知対象）。
+    差分通知と朝のダイジェストの両方で共通に使う。"""
+    if any(kw in line for kw in config.SUPPLY_NOISE_KEYWORDS):
+        return True, False
+    # スターターセット/構築デッキ系（「スタートデッキ」は別扱いで常に許可）
+    if any(kw in line for kw in config.DECK_PRODUCT_KEYWORDS) and "スタートデッキ" not in line:
+        if not is_pokeca:
+            return True, False
+        if any(w in line for w in ("再販", "再入荷", "再販売")):
+            return True, False  # ポケカのデッキ系は初回販売のみ（再販は転売不可）
+        dates = _upcoming_dates(line, today) if today else []
+        if not any(abs((d - today).days) <= config.INITIAL_SALE_WINDOW_DAYS for d in dates):
+            return True, False  # 発売前後の初回販売期でなければ通知しない
+        return False, True
+    return False, False
+
+
 def _is_actionable_line(line, today=None, strict=False, is_pokeca=False):
     """追加行が「通知する価値のある実質情報」か判定する。
     (1)再販/入荷/抽選/予約/コラボ/発売等の行動語を含む、または
@@ -590,18 +611,11 @@ def _is_actionable_line(line, today=None, strict=False, is_pokeca=False):
         return False
     if any(mk in line for mk in config.DIGEST_EXCLUDE_MARKERS):
         return False
-    if any(kw in line for kw in config.SUPPLY_NOISE_KEYWORDS):
+    excluded, forced = _deck_supply_rule(line, is_pokeca, today)
+    if excluded:
         return False
-    # スターターセット/構築デッキ系（「スタートデッキ」は別扱いで常に許可）
-    if any(kw in line for kw in config.DECK_PRODUCT_KEYWORDS) and "スタートデッキ" not in line:
-        if not is_pokeca:
-            return False
-        if any(w in line for w in ("再販", "再入荷", "再販売")):
-            return False  # ポケカのデッキ系は初回販売のみ（再販は転売不可）
-        dates = _upcoming_dates(line, today) if today else []
-        if not any(abs((d - today).days) <= config.INITIAL_SALE_WINDOW_DAYS for d in dates):
-            return False  # 発売前後の初回販売期でなければ通知しない
-        return True
+    if forced:
+        return True  # ポケカのデッキ系・初回販売期（規則で明示的に許可）
     if any(kw in line for kw in config.NOTIFY_ACTION_KEYWORDS):
         return True
     if strict:
@@ -866,13 +880,12 @@ def run_discovery(prev, new_state, alerts):
     # 東映ストアの全カタログ(約31BOX)をカバーできる。個別ページ監視(toei_stock_status)は
     # 高優先5商品の鮮度用に併存（検索APIはCDNキャッシュで数分遅れる可能性があるため）。
     if not first_toei:
-        restocked = [
-            b for g, b in boxes.items()
-            if (toei_known.get(g) or {}).get("stockMsg") == "×"
-            and (b.get("stockMsg") or "×") != "×"
-            # ×→「販売終了」等は入荷ではないので在庫復活として通知しない（誤報ガード）
-            and not any(w in (b.get("stockMsg") or "") for w in config.TOEI_SWEEP_IGNORE)
-        ]
+        today = datetime.now(ZoneInfo("Asia/Tokyo")).date()
+        restocked, old_only = _sweep_restocked(boxes, toei_known, today)
+        for b in old_only:
+            # 全商品1年半ルール: 旧弾の在庫変化はログのみ（TOEI_SWEEP_OLD_ALERTで通知化可能）
+            print(f"  東映在庫スイープ: {b['name'][:36]} が×→{b.get('stockMsg','')}に変化"
+                  f"（発売{b.get('releaseDt','')}・1年半超のため通知対象外）")
         if restocked:
             names = "、".join(b["name"][:30] for b in restocked[:5])
             print(f"  東映在庫スイープ: {len(restocked)}件が×から変化🔔 ← 通知（{names}）")
@@ -883,6 +896,30 @@ def run_discovery(prev, new_state, alerts):
                     "retail_price": b.get("price", 0),
                 }
                 alerts.append((sweep_item, f"在庫表示が「×」→「{b.get('stockMsg', '')}」に変化", "stock"))
+
+
+def _sweep_restocked(boxes, toei_known, today):
+    """東映在庫スイープ: 「×→入荷」に変化したBOXを (通知対象, 旧弾のため通知対象外) に分けて返す。
+    1年半ルール（全商品共通）: releaseDtが1年半超の旧弾は通知しない
+    （TOEI_SWEEP_OLD_ALERT=True で例外的に通知可能）。販売終了等の変化は対象外。"""
+    from datetime import date
+    notify, old_only = [], []
+    for g, b in boxes.items():
+        if (toei_known.get(g) or {}).get("stockMsg") != "×":
+            continue
+        msg = b.get("stockMsg") or "×"
+        if msg == "×" or any(w in msg for w in config.TOEI_SWEEP_IGNORE):
+            continue
+        expired = False
+        m = re.match(r"(20\d\d)/(\d{1,2})/(\d{1,2})", b.get("releaseDt") or "")
+        if m:
+            released = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            expired = (today - released).days > config.MAX_PRODUCT_AGE_DAYS
+        if expired and not config.TOEI_SWEEP_OLD_ALERT:
+            old_only.append(b)
+        else:
+            notify.append(b)
+    return notify, old_only
 
 
 def run_price_screen(prev, new_state):
@@ -1021,8 +1058,10 @@ def extract_opportunities(prev, new_state, today):
                 continue
             if any(mk in line for mk in config.DIGEST_EXCLUDE_MARKERS):
                 continue
-            if any(kw in line for kw in config.SUPPLY_NOISE_KEYWORDS):
-                continue  # サプライ類（転売妙味なし）
+            is_pokeca = ("ポケカ" in item["name"]) or ("ポケモン" in item["name"])
+            excluded, _forced = _deck_supply_rule(line, is_pokeca, today)
+            if excluded:
+                continue  # サプライ類/デッキ系規則（差分通知と共通のライフサイクル規則）
             if _mentions_expired(line, _expired_pokeca_titles(prev, new_state, today)):
                 continue  # 発売1年半超＝再販の来ない商品
             # 判定①: 近い将来の日付つき。日付が隣の行（テーブルの期間セル）にある構造に
@@ -1208,8 +1247,17 @@ def _process_item(item, prev, new_state, alerts, health):
         if prev_keys is None:
             print(f"  {item['name']}: 初回・{len(cur_keys)}記事を記録（通知なし）")
         else:
-            fresh = [k for k in cur_keys if k not in set(prev_keys)
-                     and not any(kw in articles[k]["title"] for kw in config.SUPPLY_NOISE_KEYWORDS)]
+            def _news_wanted(k):
+                a = articles[k]
+                if any(kw in a["title"] for kw in config.SUPPLY_NOISE_KEYWORDS):
+                    return False
+                if any(kw in a["title"] for kw in config.ONEPIECE_NEWS_EVENT_NOISE):
+                    return False  # 大会・体験会等の遊ぶ側イベントは購入機会でない
+                if a["category"] in config.ONEPIECE_NEWS_ALWAYS_CATEGORIES:
+                    return True  # 商品情報は常に通知
+                # イベント等のカテゴリは題名にコラボ/抽選等を含む場合のみ
+                return any(kw in a["title"] for kw in config.ONEPIECE_NEWS_TITLE_KEYWORDS)
+            fresh = [k for k in cur_keys if k not in set(prev_keys) and _news_wanted(k)]
             if fresh:
                 names = "、".join(articles[k]["title"][:26] for k in fresh[:5])
                 print(f"  {item['name']}: 新着{len(fresh)}件検知🔔 ← 通知（{names}）")

@@ -527,9 +527,22 @@ EXCLUDE_TITLE_KEYWORDS = [
 # 動的監視候補の上限（net利益降順で上位のみ。暴走防止）
 MAX_DISCOVERED_ITEMS = 30
 
+# 東映在庫スイープにも1年半ルールを適用（全商品共通規則）。
+# 旧弾の在庫復活は通知しない（ログには残す）。実在庫シグナルとして通知したくなったら
+# TOEI_SWEEP_OLD_ALERT を True にする（東映公式が旧弾を定価復活させた場合＝最上級の機会）。
+TOEI_SWEEP_OLD_ALERT = False
+
 # --- onepiece_news 方式（ワンピ公式ニュースAPI）---
 # 公式サイトのニュース一覧が使うJSON API。新着記事(title,dspdate)の差分で検知する。
 ONEPIECE_NEWS_API = "https://onepiece-cardgame.com/common/templates/api/article_list.php"
+# ニュースの通知対象（実データ99件で検証済み: 通知対象8件・大会ノイズゼロ）:
+# 「商品情報」カテゴリは常に通知。それ以外（イベント=大会情報が58%）は題名に
+# コラボ/抽選等を含む場合のみ。大会系の語を含むものは常に除外
+# （「発売記念イベント」「〜限定バトル」等が発売/限定に誤マッチするため）。
+ONEPIECE_NEWS_ALWAYS_CATEGORIES = ["商品情報"]
+ONEPIECE_NEWS_TITLE_KEYWORDS = ["コラボ", "抽選", "予約", "再販", "プロモ", "新商品"]
+ONEPIECE_NEWS_EVENT_NOISE = ["バトル", "大会", "交流会", "ティーチング", "体験会",
+                             "記念イベント", "優勝", "マッチング", "リーグ", "予選"]
 
 # --- rakuten_books 方式（楽天市場API・楽天ブックス在庫）---
 # 公式API。1リク/秒制限（REQUEST_INTERVALで遵守）。applicationIdはSecretsのRAKUTEN_APP_ID。
