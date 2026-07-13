@@ -288,6 +288,17 @@ class TestStoreLinkResolution(unittest.TestCase):
     def test_resolve_none_when_not_found(self):
         self.assertIsNone(cs.resolve_store_link("<p>無関係</p>", "【ヨドバシ】7月10日 抽選受付"))
 
+    def test_article_store_link_by_hint(self):
+        # RSS記事: タイトルの【Amazon】タグとドメイン一致するリンクだけ採用
+        html = ('<a href="https://twitter.com/share">tw</a>'
+                '<a href="https://af.moshimo.com/af/c/click?a_id=1&amp;url=https%3A%2F%2Fwww.amazon.co.jp%2Fdp%2FB0FS14%2F">Amazonで購入</a>')
+        url = cs.resolve_store_link_from_article(html, "【Amazon】DBFW スタートデッキ FS14")
+        self.assertEqual(url, "https://www.amazon.co.jp/dp/B0FS14/")
+
+    def test_article_no_hint_returns_none(self):
+        html = '<a href="https://www.amazon.co.jp/dp/X/">buy</a>'
+        self.assertIsNone(cs.resolve_store_link_from_article(html, "店舗タグなしの商品"))
+
 
 class TestActionableLine(unittest.TestCase):
     """通知価値の判定: 実質情報のみ通知。"""

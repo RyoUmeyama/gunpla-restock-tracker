@@ -759,6 +759,26 @@ def _mentions_expired(line, expired_titles):
     return any(t in nl for t in expired_titles)
 
 
+def resolve_store_link_from_article(html, title):
+    """nyuka-now等の記事ページ（単一商品）から遷移先ストアURLを解決する。
+    タイトルの【Amazon】等の店舗タグとドメインが一致するリンクだけを採用し、
+    一致が取れなければ None（誤リンクを載せない。呼び出し側が検索URLで代替）。"""
+    if not html:
+        return None
+    hint = None
+    for name, domains in config.STORE_NAME_HINTS.items():
+        if name in title:
+            hint = domains
+            break
+    if not hint:
+        return None  # 店舗が特定できない記事は確実な対応が取れない
+    for m in re.finditer(r'href="(https?://[^"]+?)"', html):
+        real = _clean_store_url(m.group(1).replace("&amp;", "&").replace("&#038;", "&"))
+        if real and any(d in real for d in hint):
+            return real
+    return None
+
+
 def _item_short_name(item):
     """監視名から商品コア名を取り出す（検索クエリ・ダイジェスト表示用）。"""
     short = item.get("name", "")
@@ -841,10 +861,24 @@ def run_discovery(prev, new_state, alerts):
         elif fresh:
             names = "、".join(found[lk]["title"][:30] for lk in fresh[:5])
             print(f"  RSS発見器: 新規{len(fresh)}件発見🔔 ← 通知（{names}）")
-            lines = [f"{found[lk]['title']} {found[lk]['link']}" for lk in fresh[:8]]
+            # 記事ページを開かなくても買いに行けるよう、記事から遷移先ストアURLを解決して
+            # 併記する（「詳細ページへのリンクがなく集約ページだけ」問題への対応）。
+            # ストアと確実に対応が取れなければ検索URLで代替（誤リンクは載せない）。
+            lines = []
+            for lk in fresh[:5]:
+                title = found[lk]["title"]
+                store_url = None
+                try:
+                    art_html = fetch(lk, config.DEFAULT_ENCODING)
+                    time.sleep(config.REQUEST_INTERVAL)
+                    store_url = resolve_store_link_from_article(art_html, title)
+                except Exception as e:
+                    print(f"  ⚠ 記事ページ取得失敗（{lk[:40]}）: {e}")
+                dest = store_url or f"検索:{fallback_search_url(title, {'name': title})}"
+                lines.append(f"{title[:60]} →{dest}（記事:{lk}）")
             # 発見通知用の疑似item
             disco_item = {"name": "新弾・再販を発見（RSS）", "url": config.FEED_URLS[0], "retail_price": 0}
-            alerts.append((disco_item, "新規発見: " + " / ".join(lines), "info"))
+            alerts.append((disco_item, "新規発見: " + " ／ ".join(lines), "info"))
         else:
             print(f"  RSS発見器: 新規なし（既知{len(discovered)}件）")
 
