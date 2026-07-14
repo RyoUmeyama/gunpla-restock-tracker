@@ -38,6 +38,9 @@ def _this_year():
 # ＝1起動で約15分を浪費していた（Actions課金枠の主因）。初回失敗でホスト単位でスキップする。
 _UNREACHABLE_HOSTS = set()
 
+# 発売1年半超で失効した監視のログ出力済みキー（毎パス繰り返さず起動中1回だけ出す）
+_EXPIRY_LOGGED = set()
+
 
 def http_get(url, **kwargs):
     """requests.get のラッパ。接続不能ホストはパス内で再試行せず即座に諦める。
@@ -1162,6 +1165,13 @@ def append_heartbeat(prev, new_state, alerts, health):
         lines.append(f"想定内の取得不能{len(expected)}件（" + "・".join(parts) + "）")
     if unexpected:
         lines.append(f"⚠要確認の取得不能{len(unexpected)}件: " + "、".join(unexpected[:6]))
+    # 週次運用サマリ（月曜のみ）: 通知フィルタが絞りすぎていないかを数字で確認できるようにする
+    stats = new_state.get("weekly_stats") or {}
+    if now_jst.weekday() == 0 and stats:
+        lines.append(f"📈 週次サマリ（{stats.get('since', '?')}〜）: "
+                     f"通知{stats.get('notified', 0)}件・ノイズ抑制{stats.get('suppressed', 0)}件・"
+                     f"新チャンス{stats.get('chances', 0)}件")
+        new_state["weekly_stats"] = {"notified": 0, "suppressed": 0, "chances": 0, "since": today}
     lines.append("このレポートが毎朝届いていればBotは正常稼働しています。")
     hb_item = {
         "name": "📊 日次ヘルスレポート（Bot生存確認）",
@@ -1181,6 +1191,8 @@ def append_heartbeat(prev, new_state, alerts, health):
     first_digest = not isinstance(seen_prev, list)
     seen = list(seen_prev or [])
     fresh = [o for o in opps if o not in set(seen)]
+    if isinstance(new_state.get("weekly_stats"), dict):
+        new_state["weekly_stats"]["chances"] = new_state["weekly_stats"].get("chances", 0) + len(fresh)
     seen.extend(fresh)
     new_state["digest_seen"] = seen[-config.DIGEST_SEEN_KEEP:]
     if first_digest:
@@ -1347,6 +1359,7 @@ def _process_item(item, prev, new_state, alerts, health):
             # 通知しない（=通知が来たら本物、の精度を守る）。
             actionable = [l for l in added if _notable(l)]
             if not actionable:
+                health["suppressed"] = health.get("suppressed", 0) + 1
                 print(f"  {item['name']}: 更新あり（実質情報なし・通知抑制。新規{len(added)}行）")
                 return
             shown = []
@@ -1429,7 +1442,7 @@ def run_once():
     prev = load_state()
     new_state = {}
     alerts = []  # [(item, detail)] 通知すべき変化
-    health = {"ok": [], "fail": []}  # 日次ヘルスレポート用。fail は (name, url) のリスト
+    health = {"ok": [], "fail": [], "suppressed": 0}  # 日次ヘルス/週次サマリ用
 
     # Phase2: RSS発見器で新弾・再販を自動キャッチ（固定リストを動的に補完）。
     # 想定外の例外でもパス全体を壊さない（関連stateを前回維持して継続）。
@@ -1471,7 +1484,9 @@ def run_once():
             if age > config.MAX_PRODUCT_AGE_DAYS:
                 if key in prev:
                     new_state[key] = prev[key]
-                print(f"  {item['name']}: 発売から1年半経過のため監視対象外（発売日{rd}）")
+                if key not in _EXPIRY_LOGGED:  # ログは起動中1回だけ（毎パス40行の冗長さ解消）
+                    _EXPIRY_LOGGED.add(key)
+                    print(f"  {item['name']}: 発売から1年半経過のため監視対象外（発売日{rd}）")
                 continue
 
         # 1商品の判定で想定外の例外が起きてもパス全体を壊さない（バグ・サイト構造の
@@ -1485,6 +1500,15 @@ def run_once():
                 health["ok"].remove(item["name"])
             health["fail"].append((item["name"], item.get("url", "")))
             print(f"  ⚠ {item['name']}: 想定外エラーで判定不能（前回状態を維持）: {e}")
+
+    # 週次運用サマリ用の集計（通知フィルタの過剰抑制をユーザーが確認できるようにする）
+    stats = dict(prev.get("weekly_stats") or {})
+    for k0 in ("notified", "suppressed", "chances"):
+        stats.setdefault(k0, 0)
+    stats.setdefault("since", datetime.now(ZoneInfo("Asia/Tokyo")).date().isoformat())
+    stats["notified"] += len(alerts)
+    stats["suppressed"] += health.get("suppressed", 0)
+    new_state["weekly_stats"] = stats
 
     # 日次ヘルスレポート（JST9時以降の最初のパスで1通・生存確認）
     append_heartbeat(prev, new_state, alerts, health)
