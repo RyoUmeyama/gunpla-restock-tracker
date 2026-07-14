@@ -68,6 +68,11 @@ GitHub Actions（動的IP）からは正当に利用できなくなった（Yaho
 - 復活する場合は固定IPのVPSへの実行環境移設（月349円〜）＋新API
   （openapi.rakuten.co.jp + accessKey認証）へのコード改修が必要（`_check_rakuten_books`は将来用に残置）
 
+## 📜 通知判定ルール
+通知の判定ルール（27項目）は **[NOTIFICATION_RULES.md](NOTIFICATION_RULES.md)** に一覧化されている。
+ルールの実体はコード（config.py/check_stock.py）＋CIテストで、この文書は人間向けの仕様書。
+**ルールを変更したら必ず両方を更新すること。**
+
 ## 🎯 機能
 
 - ✅ 複数サイト・複数判定方式に対応（`method` で切替）。商品ページを監視し在庫復活を検知
