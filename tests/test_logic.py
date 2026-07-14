@@ -507,5 +507,109 @@ class TestWeeklySummary(unittest.TestCase):
         self.assertEqual(stats["notified"], 7)  # 蓄積維持
 
 
+class TestProcessItemPageUpdate(unittest.TestCase):
+    """_process_item page_update の状態遷移（初回/変化あり/抑制/取得失敗）。"""
+
+    ITEM = {"name": "ポケカ テスト 抽選/再販まとめ（anime-matsuri）", "method": "page_update",
+            "url": "https://anime-matsuri.com/test-reservation-lottery/", "retail_price": 5400,
+            "key": "test_pu"}
+
+    def _run(self, sig_result, prev):
+        orig = cs.compute_page_signature
+        cs.compute_page_signature = lambda item: sig_result
+        orig_sleep = cs.time.sleep
+        cs.time.sleep = lambda s: None
+        try:
+            new_state, alerts, health = {}, [], {"ok": [], "fail": [], "suppressed": 0}
+            cs._process_item(self.ITEM, prev, new_state, alerts, health)
+            return new_state, alerts, health
+        finally:
+            cs.compute_page_signature = orig
+            cs.time.sleep = orig_sleep
+
+    def test_first_seen_records_baseline_no_alert(self):
+        ns, alerts, h = self._run(("sig1", ["抽選受付 7月20日"], True, "<html>"), {})
+        self.assertEqual(ns["test_pu"]["sig"], "sig1")
+        self.assertEqual(alerts, [])
+        self.assertIn(self.ITEM["name"], h["ok"])
+
+    def test_actionable_change_alerts(self):
+        prev = {"test_pu": {"sig": "old", "lines": [], "links": {}}}
+        ns, alerts, h = self._run(("new", ["【ヨドバシ】抽選受付開始 7月20日まで"], True, "<html>"), prev)
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("ヨドバシ", alerts[0][1])
+        self.assertIn("→", alerts[0][1])  # リンク（検索フォールバック含む）付き
+
+    def test_noise_change_suppressed(self):
+        prev = {"test_pu": {"sig": "old", "lines": [], "links": {}}}
+        ns, alerts, h = self._run(("new", ["ただの本文更新です"], True, "<html>"), prev)
+        self.assertEqual(alerts, [])
+        self.assertEqual(h["suppressed"], 1)
+
+    def test_fetch_failure_keeps_prev_state(self):
+        prev = {"test_pu": {"sig": "old", "lines": ["a"], "links": {}}}
+        ns, alerts, h = self._run((None, None, False, None), prev)
+        self.assertEqual(ns["test_pu"], prev["test_pu"])
+        self.assertEqual([n for n, _ in h["fail"]], [self.ITEM["name"]])
+
+
+class TestProcessItemStock(unittest.TestCase):
+    """在庫系（toei_stock_status）の遷移: 復活で通知・継続では沈黙。"""
+
+    ITEM = {"name": "テストBOX（在庫）", "method": "toei_stock_status",
+            "url": "https://store.toei-anim.co.jp/shop/g/gTEST/", "retail_price": 5280, "key": "t_stock"}
+
+    def _run(self, in_stock, prev):
+        orig = cs.check_item
+        cs.check_item = lambda item: (in_stock, True, "stub")
+        orig_sleep = cs.time.sleep
+        cs.time.sleep = lambda s: None
+        try:
+            new_state, alerts, health = {}, [], {"ok": [], "fail": [], "suppressed": 0}
+            cs._process_item(self.ITEM, prev, new_state, alerts, health)
+            return new_state, alerts
+        finally:
+            cs.check_item = orig
+            cs.time.sleep = orig_sleep
+
+    def test_restock_alerts(self):
+        ns, alerts = self._run(True, {"t_stock": False})
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0][2], "stock")
+
+    def test_still_in_stock_silent(self):
+        ns, alerts = self._run(True, {"t_stock": True})
+        self.assertEqual(alerts, [])
+
+    def test_first_seen_silent(self):
+        ns, alerts = self._run(True, {})
+        self.assertEqual(alerts, [])
+
+
+class TestAmLotteryPageDiscovery(unittest.TestCase):
+    """anime-matsuri 新規抽選まとめページの自動発見。"""
+
+    def test_filters_slug_and_title(self):
+        posts = [
+            {"slug": "pokemoncard-new-reservation-lottery", "link": "https://anime-matsuri.com/a/",
+             "title": {"rendered": "ポケモンカード 新弾の抽選予約まとめ"}},
+            {"slug": "pokemoncard-atari-list", "link": "https://anime-matsuri.com/b/",
+             "title": {"rendered": "ポケモンカード 当たりカードまとめ"}},  # slug不一致
+            {"slug": "unionarena-x-reservation-lottery", "link": "https://anime-matsuri.com/c/",
+             "title": {"rendered": "ユニオンアリーナの抽選予約まとめ"}},  # 対象外タイトル
+        ]
+        class R:
+            def json(self):
+                return posts
+        orig = cs.http_get
+        cs.http_get = lambda url, **kw: R()
+        try:
+            pages, ok = cs.discover_am_lottery_pages()
+        finally:
+            cs.http_get = orig
+        self.assertTrue(ok)
+        self.assertEqual(list(pages), ["pokemoncard-new-reservation-lottery"])
+
+
 if __name__ == "__main__":
     unittest.main()

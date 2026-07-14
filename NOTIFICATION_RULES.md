@@ -58,5 +58,14 @@
 | 26 | Actions実行失敗は即Discord通知 | notify-failure.yml | PR #7 |
 | 27 | 通知はメール＋Discordの2経路固定（新しい通知アプリは追加しない・ユーザー方針） | — | ntfy撤回 |
 
+| 28 | anime-matsuriの新しい抽選まとめページ（reservation-lottery）を毎朝自動発見し、未監視なら監視追加候補として提案 | `discover_am_lottery_pages` | PR #25 |
+
+## 実装モジュール構成（2026-07-14リファクタリング後）
+- `check_stock.py` — 監視の実行・状態管理・通知（オーケストレーション）
+- `rules.py` — 判定規則（日付解決・実質情報・商品ライフサイクル・相場選別）
+- `links.py` — リンク解決（アンカー照合・アフィ剥がし・検索URL）
+- `netutil.py` — 通信（サーキットブレーカー付きHTTP）
+- `config.py` — 監視対象と全ルールの定数
+
 ## 経緯の原本
 各ルールの背景・実データ検証はPR #1〜#23の説明文に記録されている（このリポジトリのPull Requests参照）。
