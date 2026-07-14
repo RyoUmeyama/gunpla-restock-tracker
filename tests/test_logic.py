@@ -242,6 +242,34 @@ class TestExtractOpportunities(unittest.TestCase):
         self.assertEqual(len(opps), 1)
         self.assertIn("7月8日", opps[0])
 
+    def test_non_card_tag_excluded(self):
+        # 【雑誌】等のカード以外商品タグは通知しない（週刊ジャンプ毎週通知の回帰テスト）
+        from datetime import date
+        today = date(2026, 7, 14)
+        line = "アニメイトにて【雑誌】週刊少年ジャンプ 2026年7月27日号が販売継続中です"
+        self.assertFalse(cs._is_actionable_line(line, today))
+        self.assertFalse(cs._title_matches("【雑誌】週刊少年ジャンプ ワンピース特集号"))
+
+    def test_magazine_with_card_appendix_notified(self):
+        # 例外: カード付録つき雑誌（Vジャンプのプロモカード等）は購入対象（ユーザー指示）
+        from datetime import date
+        today = date(2026, 7, 14)
+        self.assertTrue(cs._is_actionable_line(
+            "【雑誌】Vジャンプ9月号 ワンピースカード プロモカード付録 予約受付", today))
+        self.assertTrue(cs._title_matches("【雑誌】Vジャンプ 遊戯王プロモカード付録つき"))
+
+    def test_status_quo_not_actionable(self):
+        # 「販売継続中」は状態の継続でありチャンスではない
+        from datetime import date
+        self.assertFalse(cs._is_actionable_line(
+            "ワンピースカード OP-17 BOXが販売継続中です", date(2026, 7, 14)))
+
+    def test_card_goods_tag_still_passes(self):
+        # カード商品タグ（【グッズ-カードゲーム】）は引き続き通知対象
+        from datetime import date
+        self.assertTrue(cs._is_actionable_line(
+            "【グッズ-カードゲーム】ワンピースカード OP-17 BOXの抽選受付", date(2026, 7, 14)))
+
 
 class TestStoreLinkResolution(unittest.TestCase):
     """遷移先ストアURLの解決とアフィリエイト剥がし。"""
