@@ -418,6 +418,9 @@ def _title_matches(title):
     発見通知に混ざっていた（通知精度低下の一因）。"""
     if not any(kw in title for kw in config.WATCH_KEYWORDS):
         return False
+    if any(tag in title for tag in config.NON_CARD_CATEGORY_TAGS) and \
+            not any(mk in title for mk in config.MAGAZINE_CARD_MARKERS):
+        return False  # 雑誌・フィギュア等のカード以外商品（カード付録つきは対象）
     if any(kw in title for kw in config.POKECA_TITLE_KEYWORDS):
         return True
     return not any(kw in title for kw in config.EXCLUDE_TITLE_KEYWORDS)
@@ -617,6 +620,14 @@ def _is_actionable_line(line, today=None, strict=False, is_pokeca=False):
         return False
     if any(mk in line for mk in config.DIGEST_EXCLUDE_MARKERS):
         return False
+    # カード以外の商品（雑誌/書籍/フィギュア等のカテゴリタグ）は対象外。
+    # ただしカード付録（Vジャンプのプロモカード等）を含むものは購入対象になり得るため通知する。
+    if any(tag in line for tag in config.NON_CARD_CATEGORY_TAGS):
+        if not (("カード" in line) and any(mk in line for mk in config.MAGAZINE_CARD_MARKERS)):
+            return False
+    # 「販売継続中」等は状態の継続であって新しいチャンスではない
+    if any(mk in line for mk in config.STATUS_QUO_MARKERS):
+        return False
     excluded, forced = _deck_supply_rule(line, is_pokeca, today)
     if excluded:
         return False
@@ -814,7 +825,8 @@ def fallback_search_url(line, item):
     q = re.sub(r"[（(].*?[)）]", " ", q)                   # 括弧注記
     q = q.replace("「", " ").replace("」", " ").replace("『", " ").replace("』", " ")
     for w in ("再販", "入荷", "抽選", "予約", "受付中", "受付", "先着", "販売開始", "販売",
-              "発売", "在庫", "応募", "開始", "期間", "情報", "まとめ", "〜", "～"):
+              "発売", "在庫", "応募", "開始", "期間", "情報", "まとめ", "〜", "～",
+              "にて", "継続中", "継続", "です", "ます"):
         q = q.replace(w, " ")
     q = re.sub(r"[、。．！!？?・]", " ", q)                # 句読点・記号
     q = re.sub(r"\s(が|を|に|は|で|の|と)\s", " ", " " + q + " ")  # 浮いた助詞
@@ -1098,6 +1110,11 @@ def extract_opportunities(prev, new_state, today):
                 continue
             if any(mk in line for mk in config.DIGEST_EXCLUDE_MARKERS):
                 continue
+            if any(tag in line for tag in config.NON_CARD_CATEGORY_TAGS) and \
+                    not any(mk in line for mk in config.MAGAZINE_CARD_MARKERS):
+                continue  # カード以外の商品（雑誌等。カード付録つきは通知対象）
+            if any(mk in line for mk in config.STATUS_QUO_MARKERS):
+                continue  # 状態継続の文言はチャンスでない
             is_pokeca = ("ポケカ" in item["name"]) or ("ポケモン" in item["name"])
             excluded, _forced = _deck_supply_rule(line, is_pokeca, today)
             if excluded:
