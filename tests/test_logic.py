@@ -611,5 +611,47 @@ class TestAmLotteryPageDiscovery(unittest.TestCase):
         self.assertEqual(list(pages), ["pokemoncard-new-reservation-lottery"])
 
 
+class TestLotteryCandidateExtraction(unittest.TestCase):
+    """応募台帳への連携候補の抽出（案A/B・店舗＋締切＋抽選語が揃った行のみ）。"""
+
+    ITEM = {"name": "ポケカ ストームエメラルダ 抽選/予約まとめ（anime-matsuri）"}
+
+    def _x(self, line):
+        from datetime import date
+        return cs.extract_lottery_candidate(line, self.ITEM, date(2026, 7, 14), cs.config.STORE_NAME_HINTS)
+
+    def test_full_candidate(self):
+        c = self._x("ヨドバシで抽選受付 7月20日〜7月27日")
+        self.assertEqual(c["channel"], "ヨドバシ")
+        self.assertEqual(c["product"], "ポケカ ストームエメラルダ")
+        self.assertEqual(c["apply_end"], "2026-07-27")
+        self.assertEqual(c["apply_start"], "2026-07-20")
+
+    def test_no_store_no_candidate(self):
+        self.assertIsNone(self._x("抽選受付 7月20日〜7月27日"))
+
+    def test_no_date_no_candidate(self):
+        self.assertIsNone(self._x("ヨドバシで抽選受付中"))
+
+    def test_no_lottery_word_no_candidate(self):
+        self.assertIsNone(self._x("ヨドバシで7月20日に再入荷"))
+
+    def test_save_dedupes_by_id(self):
+        import tempfile, os, json
+        with tempfile.TemporaryDirectory() as d:
+            orig = cs.DETECTED_LOTTERIES_FILE
+            cs.DETECTED_LOTTERIES_FILE = os.path.join(d, "det.json")
+            try:
+                c = {"channel": "ヨドバシ", "product": "P", "apply_start": None,
+                     "apply_end": "2026-07-27", "source_url": "u", "detected_at": "2026-07-14"}
+                cs.save_lottery_candidates([c])
+                cs.save_lottery_candidates([dict(c)])  # 同一候補の再検知
+                data = json.load(open(cs.DETECTED_LOTTERIES_FILE))
+                self.assertEqual(len(data), 1)
+                self.assertIn("id", data[0])
+            finally:
+                cs.DETECTED_LOTTERIES_FILE = orig
+
+
 if __name__ == "__main__":
     unittest.main()
