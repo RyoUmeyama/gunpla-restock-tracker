@@ -220,6 +220,15 @@ WATCH_ITEMS = [
         "key": "pokeca_stormemerald_am",
     },
     {
+        # 30th BOX（拡張パック本体）専用まとめ。自動発見機能（2026-07-14）が検出した未監視ページ。
+        "name": "ポケカ 30th CELEBRATION BOX 抽選/予約まとめ（anime-matsuri）",
+        "method": "page_update",
+        "url": "https://anime-matsuri.com/pokemoncard-mega-30th-celebration-box-reservation-lottery/",
+        "retail_price": 10800,
+        "release_date": "2026-09-16",  # 発売日（1年半で自動失効・全商品共通規則）
+        "key": "pokeca_30thbox_am",
+    },
+    {
         # 30周年記念（2026-09/10発売）。予約・抽選戦線が進行中の最重要新弾。
         # FUTURISTIC BOX(定価27,500)等の高額セットも同ページで拾う。
         "name": "ポケカ 30th CELEBRATION 抽選/予約まとめ（anime-matsuri）",
@@ -444,6 +453,15 @@ MAX_DISCOVERED_ITEMS = 30
 # 旧弾の在庫復活は通知しない（ログには残す）。実在庫シグナルとして通知したくなったら
 # TOEI_SWEEP_OLD_ALERT を True にする（東映公式が旧弾を定価復活させた場合＝最上級の機会）。
 TOEI_SWEEP_OLD_ALERT = False
+
+# --- anime-matsuri 新規抽選まとめページの自動発見 ---
+# 新弾（EB-05等）の「抽選予約・再販入荷まとめ」ページが作られたら、毎朝のヘルスレポートで
+# 監視追加候補として提案する（従来は手動でREST検索して探していた作業の自動化）。
+AM_POSTS_API = "https://anime-matsuri.com/wp-json/wp/v2/posts"
+AM_LOTTERY_SLUG_MARKER = "reservation-lottery"
+# 提案対象のタイトル語（カード商品のみ）
+AM_LOTTERY_TITLE_KEYWORDS = ["ポケモンカード", "ポケカ", "ワンピースカード", "ワンピカード",
+                             "遊戯王", "ドラゴンボール", "名探偵コナン"]
 
 # --- onepiece_news 方式（ワンピ公式ニュースAPI）---
 # 公式サイトのニュース一覧が使うJSON API。新着記事(title,dspdate)の差分で検知する。

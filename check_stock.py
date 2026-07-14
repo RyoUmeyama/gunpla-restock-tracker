@@ -27,41 +27,28 @@ import config
 from email_utils import send_email_with_retry
 from webhook_utils import send_webhook
 
+# --- 分割モジュール（テスト・既存コードの互換のため名前を再輸出する）---
+from netutil import _UNREACHABLE_HOSTS, http_get, fetch
+from rules import (
+    _this_year, _upcoming_dates, _normalize_box_name, _deck_supply_rule,
+    _is_actionable_line, _expired_pokeca_titles, _mentions_expired,
+    match_altema_price, passes_profit, _item_short_name,
+)
+from links import (
+    _norm_link_text, _clean_store_url, _unwrap_affiliate, extract_anchors,
+    resolve_store_link, resolve_store_link_from_article, fallback_search_url,
+)
 
-def _this_year():
-    """現在の年（西暦）。ポケカ新弾の発売日フィルタを年経過で自動追従させるため。"""
-    return datetime.now().year
 
 
-# 同一パス内で接続不能（connectタイムアウト等）だったホスト。
-# 例: nyuka-now.com は GitHub Actions のクラウドIPを遮断しており、20秒タイムアウト×11URL×4パス
-# ＝1起動で約15分を浪費していた（Actions課金枠の主因）。初回失敗でホスト単位でスキップする。
-_UNREACHABLE_HOSTS = set()
+
 
 # 発売1年半超で失効した監視のログ出力済みキー（毎パス繰り返さず起動中1回だけ出す）
 _EXPIRY_LOGGED = set()
 
 
-def http_get(url, **kwargs):
-    """requests.get のラッパ。接続不能ホストはパス内で再試行せず即座に諦める。
-    タイムアウト・UAは未指定なら既定値を補う。raise_for_status 済みの Response を返す。"""
-    host = urlsplit(url).netloc
-    if host in _UNREACHABLE_HOSTS:
-        raise ConnectionError(f"{host} は接続不能（このパスではスキップ）")
-    kwargs.setdefault("timeout", config.REQUEST_TIMEOUT)
-    headers = kwargs.pop("headers", None) or {"User-Agent": config.USER_AGENT}
-    try:
-        resp = requests.get(url, headers=headers, **kwargs)
-    except (requests.exceptions.ConnectTimeout, requests.exceptions.ConnectionError):
-        _UNREACHABLE_HOSTS.add(host)
-        raise
-    resp.raise_for_status()
-    return resp
 
 
-def fetch(url, encoding):
-    resp = http_get(url)
-    return resp.content.decode(encoding, errors="replace")
 
 
 def check_item(item):
@@ -320,54 +307,10 @@ def fetch_pricebase_box_price(url, retail=0):
     return median, True
 
 
-def _normalize_box_name(s):
-    """相場照合用に銘柄名を正規化する。装飾語・記号・空白を落として比較精度を上げる。
-    全角/半角スペース・中黒・括弧類を除去し、監視名固有の装飾(ポケカ/BOX/再販集約等)も削る。"""
-    s = s or ""
-    for w in ("ポケカ ", "ポケモンカード ", " BOX", "BOX", " 再販集約", "再販集約",
-              "（横断）", "(横断)", "（在庫）", "(在庫)"):
-        s = s.replace(w, "")
-    # 空白・中黒・括弧などの照合ノイズを除去
-    s = re.sub(r"[\s　・,，()（）\[\]【】「」]", "", s)
-    return s
 
 
-def match_altema_price(name, prices):
-    """altema相場辞書から監視名 name に対応する買取価格を選ぶ。
-    正規化後、(1)完全一致を最優先。(2)無ければ『監視名コアが altema銘柄名に含まれる』
-    候補のうち最短(=余計な装飾やセット品でない単品)を選ぶ。
-    altemaは単品BOX名が正解で、長い名前はセット/同梱品など別物の罠のため最短を採る。
-    返り値: price(int) | None。"""
-    core = _normalize_box_name(name)
-    if len(core) < 3:  # 短すぎるコアは誤マッチしやすいので照合しない
-        return None
-    candidates = []  # (正規化altema名長, price)
-    for k, v in prices.items():
-        nk = _normalize_box_name(k)
-        if core == nk:
-            return v  # 完全一致が最優先
-        if core in nk:
-            candidates.append((len(nk), v))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda x: x[0])  # 最短=最も単品に近い
-    return candidates[0][1]
 
 
-def passes_profit(retail, market, is_pokeca):
-    """相場選別: 市場価格と定価から、監視ON/除外を判定する。
-    返り値: 'active'(監視ON) / 'dropped'(除外) / 'unknown'(判定不能=安全側で監視継続)。
-    ポケカは別格で閾値を下げる(定価以上で売れれば監視)。"""
-    if not retail or not market or retail <= 0 or market <= 0:
-        return "unknown"
-    spread = market / retail
-    net = market * (1 - config.FEE_RATE) - retail
-    spread_in = config.POKECA_SPREAD_IN if is_pokeca else config.PROFIT_SPREAD_IN
-    if spread >= spread_in and net > 0:
-        return "active"
-    if spread < config.PROFIT_SPREAD_OUT:
-        return "dropped"
-    return "unknown"  # 中間帯は監視継続（安全側）
 
 
 def discover_toei_new_boxes():
@@ -510,6 +453,28 @@ def fetch_onepiece_news():
     return out, bool(out)
 
 
+def discover_am_lottery_pages():
+    """anime-matsuriの新着記事から新しい「抽選予約・再販まとめ」ページを発見する。
+    返り値: (pages: dict[slug->{title,url}], ok: bool)。
+    新弾のまとめページ（EB-05等）が作られたら監視追加候補として提案するための入力。"""
+    try:
+        resp = http_get(config.AM_POSTS_API, params={"per_page": "50", "_fields": "slug,link,title"})
+        posts = resp.json()
+    except Exception as e:
+        print(f"  ⚠ anime-matsuri記事一覧の取得失敗: {e}")
+        return {}, False
+    pages = {}
+    for p in posts:
+        slug = p.get("slug") or ""
+        title = ((p.get("title") or {}).get("rendered") or "").strip()
+        if config.AM_LOTTERY_SLUG_MARKER not in slug:
+            continue
+        if not any(kw in title for kw in config.AM_LOTTERY_TITLE_KEYWORDS):
+            continue
+        pages[slug] = {"title": re.sub(r"<[^>]+>", "", title), "url": p.get("link") or ""}
+    return pages, True
+
+
 def compute_page_signature(item):
     """page_update方式: ページから再販関連の本文だけを抽出・正規化してハッシュを返す。
     広告・カウンタ等のノイズを避けるため、再販キーワードと日付を含む行に絞る。
@@ -572,270 +537,28 @@ def compute_page_signature(item):
     return sig, lines, True, html
 
 
-def _unwrap_affiliate(url):
-    """楽天アフィリエイト/バリューコマース等のラッパーURLから実際の遷移先を取り出す。
-    取り出せない形式はそのまま返す（アフィリエイト経由でも商品ページには着地する）。"""
-    from urllib.parse import urlparse, parse_qs, unquote
-    try:
-        q = parse_qs(urlparse(url).query)
-        for key in ("pc", "m", "vc_url", "url", "u"):
-            vals = q.get(key)
-            if vals and vals[0].startswith("http"):
-                return unquote(vals[0])
-    except Exception:
-        pass
-    return url
 
 
-def _deck_supply_rule(line, is_pokeca, today):
-    """商品ライフサイクル規則（サプライ/デッキ系）を適用する。
-    返り値: (excluded, forced)。excluded=True なら通知対象外。
-    forced=True はポケカのデッキ系初回販売（明示的に通知対象）。
-    差分通知と朝のダイジェストの両方で共通に使う。"""
-    if any(kw in line for kw in config.SUPPLY_NOISE_KEYWORDS):
-        return True, False
-    # スターターセット/構築デッキ系（「スタートデッキ」は別扱いで常に許可）
-    if any(kw in line for kw in config.DECK_PRODUCT_KEYWORDS) and "スタートデッキ" not in line:
-        if not is_pokeca:
-            return True, False
-        if any(w in line for w in ("再販", "再入荷", "再販売")):
-            return True, False  # ポケカのデッキ系は初回販売のみ（再販は転売不可）
-        dates = _upcoming_dates(line, today) if today else []
-        if not any(abs((d - today).days) <= config.INITIAL_SALE_WINDOW_DAYS for d in dates):
-            return True, False  # 発売前後の初回販売期でなければ通知しない
-        return False, True
-    return False, False
 
 
-def _is_actionable_line(line, today=None, strict=False, is_pokeca=False):
-    """追加行が「通知する価値のある実質情報」か判定する。
-    (1)再販/入荷/抽選/予約/コラボ/発売等の行動語を含む、または
-    (2)近い将来の日付＋日付以外の中身を含む（strict=Falseの場合のみ）
-    かつ、定型文・ナビ断片でなく、商品ライフサイクル規則に適合すること:
-      - サプライ類: 常に通知しない
-      - スターターセット/構築デッキ系: ポケカのみ初回販売（発売前後60日の告知）だけ通知。
-        再販は通知しない。ポケカ以外は通知しない
-      - スタートデッキ: 再販でも人気のため常に通知対象（例外）"""
-    if not (config.DIGEST_LINE_MINLEN <= len(line) <= 120):
-        return False
-    if any(mk in line for mk in config.DIGEST_EXCLUDE_MARKERS):
-        return False
-    # カード以外の商品（雑誌/書籍/フィギュア等のカテゴリタグ）は対象外。
-    # ただしカード付録（Vジャンプのプロモカード等）を含むものは購入対象になり得るため通知する。
-    if any(tag in line for tag in config.NON_CARD_CATEGORY_TAGS):
-        if not (("カード" in line) and any(mk in line for mk in config.MAGAZINE_CARD_MARKERS)):
-            return False
-    # 「販売継続中」等は状態の継続であって新しいチャンスではない
-    if any(mk in line for mk in config.STATUS_QUO_MARKERS):
-        return False
-    excluded, forced = _deck_supply_rule(line, is_pokeca, today)
-    if excluded:
-        return False
-    if forced:
-        return True  # ポケカのデッキ系・初回販売期（規則で明示的に許可）
-    if any(kw in line for kw in config.NOTIFY_ACTION_KEYWORDS):
-        return True
-    if strict:
-        return False
-    if today is not None:
-        dates = _upcoming_dates(line, today)
-        if any(0 <= (d - today).days <= config.OPPORTUNITY_WINDOW_DAYS for d in dates):
-            # 日付以外の中身があること（「2026.7.10」のような日付セル単独の行は
-            # 情報ゼロなので通知しない。中身は隣の題名行が別途拾われる）
-            residue = re.sub(
-                r"20\d\d[年./]\s*\d{1,2}[月./]\s*\d{1,2}日?|\d{1,2}月\s*\d{1,2}日"
-                r"|[〜~（）()（）\s、。・!！?？-]",
-                "", line)
-            return len(residue) >= 8
-    return False
 
 
-def _norm_link_text(t):
-    """アンカーテキスト照合用の正規化（タグ・エンティティ・空白を除去）。"""
-    t = re.sub(r"<[^>]+>", "", t)
-    t = re.sub(r"&[a-z]+;|&#\d+;", " ", t)
-    return re.sub(r"\s+", "", t)
 
 
-def _clean_store_url(href):
-    """hrefのHTMLエンティティを復元→アフィリエイト剥がし→ストアドメイン確認。
-    ストアドメインでなければ None。"""
-    href = href.replace("&amp;", "&").replace("&#038;", "&")
-    real = _unwrap_affiliate(href)
-    if "anime-matsuri.com" in real or "nyuka-now.com" in real:
-        return None
-    if any(d in real for d in config.STORE_DOMAINS):
-        return real
-    return None
 
 
-def extract_anchors(html):
-    """ページ内の <a href>text</a> を (正規化テキスト, href) のリストで返す。
-    行→リンクの確実な対応付け（アンカーテキスト一致）に使う。"""
-    anchors = []
-    if not html:
-        return anchors
-    for m in re.finditer(r'<a\s[^>]*?href="(https?://[^"]+?)"[^>]*?>(.*?)</a>', html, re.S | re.I):
-        text = _norm_link_text(m.group(2))
-        if len(text) >= 10:
-            anchors.append((text, m.group(1)))
-    return anchors
 
 
-def resolve_store_link(html, line, anchors=None):
-    """追加行 line に対応する遷移先ストアURLを返す。
-    「実際のページでは関係ないものが表示される」誤リンク事故を防ぐため、
-    **確実に対応関係が取れる場合だけ**URLを返す（推測で近傍リンクを拾わない）:
-      ① 行がリンクのアンカーテキストそのもの（集約ページの商品名リンク）→ そのhref
-      ② 行が店舗名を含む → 行の近傍でドメインが店舗名と一致するリンクのみ
-    どちらでもなければ None（URLなしで通知。集約ページのURLは従来どおり載る）。"""
-    if not html:
-        return None
-    # ① アンカーテキスト一致（最も確実: その行はリンクの文字列そのもの）
-    if anchors is None:
-        anchors = extract_anchors(html)
-    nl = _norm_link_text(line)
-    if len(nl) >= 15:
-        for na, href in anchors:
-            # 完全包含のみ採用（先頭一致では同一シリーズの別商品に交差マッチするため。
-            # 例: METAL ROBOT魂＜SIDE MS＞... は先頭が全商品共通）。
-            # 「行 ⊆ アンカー」はアンカーが商品名＋（価格：...）等の装飾付きのケース。
-            if len(na) >= 15 and (nl in na or na in nl):
-                real = _clean_store_url(href)
-                if real:
-                    return real
-    # ② 店舗名ヒント一致（行が「Amazonで抽選受付」等の場合のみ・ドメイン一致必須）
-    hint_domains = None
-    for name, domains in config.STORE_NAME_HINTS.items():
-        if name in line:
-            hint_domains = domains
-            break
-    if not hint_domains:
-        return None
-    idx = -1
-    for probe_len in (18, 10, 6):
-        probe = line[:probe_len].strip()
-        if len(probe) >= 4:
-            idx = html.find(probe)
-            if idx >= 0:
-                break
-    if idx < 0:
-        return None
-    win_start = max(0, idx - 1500)
-    window = html[win_start: idx + 1500]
-    cands = []  # (ウィンドウ内位置, 実URL)
-    for m in re.finditer(r'href="(https?://[^"]+?)"', window):
-        real = _clean_store_url(m.group(1))
-        if real and any(d in real for d in hint_domains):
-            cands.append((m.start(), real))
-    if not cands:
-        return None  # 店舗名は分かるのに一致リンクが無い→誤リンクを載せない
-    # 行の位置(ウィンドウ内では1500付近)より後ろにあるリンクを優先（表は「行→リンク」の順）
-    line_pos = idx - win_start
-    after = [c for c in cands if c[0] >= line_pos]
-    chosen = min(after, key=lambda c: c[0]) if after else max(cands, key=lambda c: c[0])
-    return chosen[1]
 
 
-def _expired_pokeca_titles(prev, new_state, today):
-    """ポケカ公式APIの商品リストから「発売から1年半超」の商品タイトル（正規化済み）を返す。
-    これらの商品は再販されないため、言及する行を通知から除外する。"""
-    officials = new_state.get("pokecard_official") or prev.get("pokecard_official") or []
-    out = []
-    for key in officials:
-        parts = key.split("|")
-        if len(parts) != 2:
-            continue
-        title, rdate = parts
-        m = re.search(r"(20\d\d)年\s*(\d{1,2})月\s*(\d{1,2})日", rdate)
-        if not m:
-            continue
-        from datetime import date
-        try:
-            released = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        except ValueError:
-            continue
-        if (today - released).days > config.MAX_PRODUCT_AGE_DAYS:
-            nt = _normalize_box_name(title)
-            # 「拡張パック」等のカテゴリ接頭辞を剥がしてコア名で照合できるようにする
-            # （通知行は「超電ブレイカーBOX再販」のようにコア名だけで言及されるため）
-            for pre in ("拡張パックデラックス", "強化拡張パック", "拡張パック",
-                        "ハイクラスパック", "スペシャルカードセット", "スペシャルBOX",
-                        "デッキビルドBOX", "プレミアムトレーナーボックス"):
-                if nt.startswith(pre):
-                    nt = nt[len(pre):]
-                    break
-            if len(nt) >= 5:
-                out.append(nt)
-    return out
 
 
-def _mentions_expired(line, expired_titles):
-    """行が「1年半超で再販の来ない商品」に言及しているか。"""
-    nl = _normalize_box_name(line)
-    return any(t in nl for t in expired_titles)
 
 
-def resolve_store_link_from_article(html, title):
-    """nyuka-now等の記事ページ（単一商品）から遷移先ストアURLを解決する。
-    タイトルの【Amazon】等の店舗タグとドメインが一致するリンクだけを採用し、
-    一致が取れなければ None（誤リンクを載せない。呼び出し側が検索URLで代替）。"""
-    if not html:
-        return None
-    hint = None
-    for name, domains in config.STORE_NAME_HINTS.items():
-        if name in title:
-            hint = domains
-            break
-    if not hint:
-        return None  # 店舗が特定できない記事は確実な対応が取れない
-    for m in re.finditer(r'href="(https?://[^"]+?)"', html):
-        real = _clean_store_url(m.group(1).replace("&amp;", "&").replace("&#038;", "&"))
-        if real and any(d in real for d in hint):
-            return real
-    return None
 
 
-def _item_short_name(item):
-    """監視名から商品コア名を取り出す（検索クエリ・ダイジェスト表示用）。"""
-    short = item.get("name", "")
-    for w in (" 抽選/再販まとめ（anime-matsuri）", " 抽選/予約まとめ（anime-matsuri）",
-              " 再販告知まとめ（anime-matsuri）", " 再販集約", "（横断）", "（在庫）",
-              "（楽天ブックス）", "（東映ストア）"):
-        short = short.replace(w, "")
-    return short.strip()
 
 
-def fallback_search_url(line, item):
-    """確実な直リンクが無い行に付ける「ストア検索URL」を作る。
-    集約ページのURLだけでは『結局どこで買えるのか』が分からないため、
-    商品名でのストア検索結果へ直接飛ばす。行に店舗名があればそのストアの検索、
-    なければAmazon検索。クエリは行から日付・記号・店舗タグを除いた商品名部分
-    （短すぎる行は監視対象の商品名を使う）。"""
-    from urllib.parse import quote
-    tpl_key = "amazon"
-    for name, key in config.STORE_SEARCH_KEY.items():
-        if name in line:
-            tpl_key = key
-            break
-    q = line
-    q = re.sub(r"【[^】]*】", " ", q)                      # 店舗タグ等
-    # 日付は全形式除去（2026年7月10日 / 2026.7.10 / 2026/7/10 / 7月10日）
-    q = re.sub(r"20\d\d[年./]\s*\d{1,2}[月./]\s*\d{1,2}日?|\d{1,2}月\s*\d{1,2}日", " ", q)
-    q = re.sub(r"[（(].*?[)）]", " ", q)                   # 括弧注記
-    q = q.replace("「", " ").replace("」", " ").replace("『", " ").replace("』", " ")
-    for w in ("再販", "入荷", "抽選", "予約", "受付中", "受付", "先着", "販売開始", "販売",
-              "発売", "在庫", "応募", "開始", "期間", "情報", "まとめ", "〜", "～",
-              "にて", "継続中", "継続", "です", "ます"):
-        q = q.replace(w, " ")
-    q = re.sub(r"[、。．！!？?・]", " ", q)                # 句読点・記号
-    q = re.sub(r"\s(が|を|に|は|で|の|と)\s", " ", " " + q + " ")  # 浮いた助詞
-    q = re.sub(r"(?<=[ぁ-んァ-ヶ一-龯A-Za-z0-9])(が|を|は|に|で)(?=\s|$)", "", q)  # 語末の助詞（「3種が」→「3種」）
-    q = re.sub(r"\s+", " ", q).strip()
-    if len(q) < 8:  # 行から商品名が取れない（期間行など）→ 監視対象の商品名で検索
-        q = _item_short_name(item)
-    q = q[:40]
-    return config.SEARCH_URL_TEMPLATES[tpl_key].format(q=quote(q))
 
 
 def load_state():
@@ -1029,33 +752,6 @@ def run_price_screen(prev, new_state):
     new_state["drop_counts"] = drop_counts
 
 
-def _upcoming_dates(text, today):
-    """テキスト中の日付(202X年M月D日 / M月D日 / 202X/M/D / 202X.M.D)を解決して返す。
-    年つき日付はその年で確定。年なしのM月D日は「今日から180日以上過去なら来年」と
-    解釈する（年跨ぎ対応）。年つき部分を除外してから年なしを探す
-    （「2024年7月19日」の「7月19日」を今年と誤解釈しないため）。"""
-    from datetime import date
-    found = []
-    for y, m, d in re.findall(r"(20\d\d)年\s*(\d{1,2})月\s*(\d{1,2})日", text):
-        try:
-            found.append(date(int(y), int(m), int(d)))
-        except ValueError:
-            continue
-    stripped = re.sub(r"20\d\d年\s*\d{1,2}月\s*\d{1,2}日", "", text)
-    for m, d in re.findall(r"(\d{1,2})月\s*(\d{1,2})日", stripped):
-        try:
-            dt = date(today.year, int(m), int(d))
-        except ValueError:
-            continue
-        if (today - dt).days > 180:
-            dt = date(today.year + 1, int(m), int(d))
-        found.append(dt)
-    for y, m, d in re.findall(r"(202\d)[/.](\d{1,2})[/.](\d{1,2})", text):
-        try:
-            found.append(date(int(y), int(m), int(d)))
-        except ValueError:
-            continue
-    return found
 
 
 def suggest_watch_candidates(prices, official_titles):
@@ -1161,6 +857,7 @@ def append_heartbeat(prev, new_state, alerts, health):
     new_state["last_heartbeat"] = prev.get("last_heartbeat")
     new_state["digest_seen"] = prev.get("digest_seen")  # 非発火パスでも既知チャンスを維持する
     new_state["suggested_seen"] = prev.get("suggested_seen")
+    new_state["am_pages_seen"] = prev.get("am_pages_seen")
     if now_jst.hour < 9 or prev.get("last_heartbeat") == today:
         return
     new_state["last_heartbeat"] = today
@@ -1228,6 +925,35 @@ def append_heartbeat(prev, new_state, alerts, health):
         alerts.append((digest_item, "\n" + "\n".join("・" + o for o in fresh), "info"))
     else:
         print("  📅 新規の応募/予約チャンスなし")
+
+    # 新しい抽選まとめページの自動発見（anime-matsuri・1日1回）。
+    # 新弾のまとめページが作られたら監視追加候補として提案する（手動REST検索の自動化）。
+    try:
+        pages, ok_am = discover_am_lottery_pages()
+        if ok_am:
+            known = set(prev.get("am_pages_seen") or [])
+            watched_urls = {it.get("url", "") for it in config.WATCH_ITEMS}
+            fresh_pages = {sl: pg for sl, pg in pages.items()
+                           if sl not in known and pg["url"] not in watched_urls}
+            new_state["am_pages_seen"] = sorted(set(pages) | known)[-300:]
+            first_am = "am_pages_seen" not in prev
+            if first_am:
+                print(f"  🔎 抽選まとめページ発見: 初回・{len(pages)}件を記録（通知なし）")
+            elif fresh_pages:
+                am_item = {
+                    "name": f"🔎 新しい抽選まとめページ {len(fresh_pages)}件（監視追加候補）",
+                    "url": "https://anime-matsuri.com/",
+                    "retail_price": 0,
+                }
+                pg_lines = [f"{pg['title'][:50]} {pg['url']}" for pg in list(fresh_pages.values())[:5]]
+                print(f"  🔎 新しい抽選まとめページ {len(fresh_pages)}件を提案")
+                alerts.append((am_item,
+                               "\n" + "\n".join("・" + l for l in pg_lines) +
+                               "\n（監視に追加したい場合はClaude Codeに伝えてください）", "info"))
+            else:
+                print("  🔎 新しい抽選まとめページなし")
+    except Exception as e:
+        print(f"  ⚠ 抽選まとめページ発見でエラー（スキップ）: {e}")
 
     # 監視追加候補の自動提案（altema相場ベース・提案済みは再提案しない）。
     # 監視リストが市場の移り変わりで古びるのを防ぐ（アビスアイ等の見落とし再発防止）。
