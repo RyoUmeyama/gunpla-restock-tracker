@@ -32,7 +32,7 @@ from netutil import _UNREACHABLE_HOSTS, http_get, fetch
 from rules import (
     _this_year, _upcoming_dates, _normalize_box_name, _deck_supply_rule,
     _is_actionable_line, _expired_pokeca_titles, _mentions_expired,
-    match_altema_price, passes_profit, _item_short_name,
+    match_altema_price, passes_profit, _item_short_name, extract_lottery_candidate,
 )
 from links import (
     _norm_link_text, _clean_store_url, _unwrap_affiliate, extract_anchors,
@@ -561,6 +561,45 @@ def compute_page_signature(item):
 
 
 
+DETECTED_LOTTERIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "detected_lotteries.json")
+
+
+def save_lottery_candidates(cands):
+    """検知した抽選候補を data/detected_lotteries.json に追記保存する（id重複は除外・上限200）。
+    このファイルはActionsがリポジトリにコミットし、応募台帳（pokemon-card-30th-tracker）が
+    取り込んで締切リマインドを行う（案A/案B: 台帳の一本化・2026-07-14）。"""
+    if not cands:
+        return
+    try:
+        existing = []
+        if os.path.exists(DETECTED_LOTTERIES_FILE):
+            with open(DETECTED_LOTTERIES_FILE, encoding="utf-8") as f:
+                existing = json.load(f)
+        known = {c.get("id") for c in existing}
+        added = 0
+        for c in cands:
+            cid = hashlib.sha256(
+                f"{c['channel']}|{c['product']}|{c.get('apply_end')}".encode("utf-8")
+            ).hexdigest()[:16]
+            if cid in known:
+                continue
+            known.add(cid)
+            existing.append({"id": cid, **c})
+            added += 1
+        if not added:
+            return
+        existing = existing[-200:]
+        os.makedirs(os.path.dirname(DETECTED_LOTTERIES_FILE), exist_ok=True)
+        tmp = DETECTED_LOTTERIES_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(existing, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        os.replace(tmp, DETECTED_LOTTERIES_FILE)
+        print(f"  📒 抽選候補{added}件を台帳連携ファイルに追記")
+    except Exception as e:
+        print(f"  ⚠ 抽選候補の保存失敗（通知には影響なし）: {e}")
+
+
 def load_state():
     if os.path.exists(config.STATE_FILE):
         try:
@@ -990,7 +1029,7 @@ def append_heartbeat(prev, new_state, alerts, health):
         print(f"  ⚠ 監視追加候補の算出でエラー（スキップ）: {e}")
 
 
-def _process_item(item, prev, new_state, alerts, health):
+def _process_item(item, prev, new_state, alerts, health, candidates=None):
     """1監視項目の判定・状態更新・通知起票。run_once から項目ごとに例外隔離されて呼ばれる。"""
     key = item["key"]
 
@@ -1108,6 +1147,14 @@ def _process_item(item, prev, new_state, alerts, health):
                 health["suppressed"] = health.get("suppressed", 0) + 1
                 print(f"  {item['name']}: 更新あり（実質情報なし・通知抑制。新規{len(added)}行）")
                 return
+            # 台帳連携: 店舗・締切が確定した抽選は構造化して応募台帳へ渡す（案A/B）
+            if candidates is not None:
+                for l in actionable:
+                    c = extract_lottery_candidate(l, item, today_jst, config.STORE_NAME_HINTS)
+                    if c:
+                        c["source_url"] = links.get(l) or item.get("url", "")
+                        c["detected_at"] = today_jst.isoformat()
+                        candidates.append(c)
             shown = []
             for l in actionable[: config.DIFF_LINES_SHOWN]:
                 entry = l[: config.DIFF_LINE_MAXLEN]
@@ -1189,6 +1236,7 @@ def run_once():
     new_state = {}
     alerts = []  # [(item, detail)] 通知すべき変化
     health = {"ok": [], "fail": [], "suppressed": 0}  # 日次ヘルス/週次サマリ用
+    candidates = []  # 応募台帳へ連携する抽選候補（店舗・締切が確定したもの）
 
     # Phase2: RSS発見器で新弾・再販を自動キャッチ（固定リストを動的に補完）。
     # 想定外の例外でもパス全体を壊さない（関連stateを前回維持して継続）。
@@ -1238,7 +1286,7 @@ def run_once():
         # 1商品の判定で想定外の例外が起きてもパス全体を壊さない（バグ・サイト構造の
         # 急変・不正なレスポンス等）。その商品だけ前回状態を維持して次へ進む。
         try:
-            _process_item(item, prev, new_state, alerts, health)
+            _process_item(item, prev, new_state, alerts, health, candidates)
         except Exception as e:
             if key in prev:
                 new_state[key] = prev[key]
@@ -1246,6 +1294,8 @@ def run_once():
                 health["ok"].remove(item["name"])
             health["fail"].append((item["name"], item.get("url", "")))
             print(f"  ⚠ {item['name']}: 想定外エラーで判定不能（前回状態を維持）: {e}")
+
+    save_lottery_candidates(candidates)
 
     # 週次運用サマリ用の集計（通知フィルタの過剰抑制をユーザーが確認できるようにする）
     stats = dict(prev.get("weekly_stats") or {})

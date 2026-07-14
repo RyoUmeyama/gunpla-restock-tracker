@@ -202,3 +202,27 @@ def _upcoming_dates(text, today):
         except ValueError:
             continue
     return found
+
+def extract_lottery_candidate(line, item, today, store_hints):
+    """検知行から「応募台帳に登録できる構造化された抽選候補」を抽出する。
+    条件（すべて必須・精度優先）:
+      - 行に店舗名（store_hints のキー）がある
+      - 抽選/応募/予約/先着 のいずれかを含む
+      - 今日以降の日付が1つ以上ある（締切=最も遅い日付、開始=最も早い日付）
+    返り値: dict（channel/product/apply_start/apply_end） | None。
+    商品名は監視アイテム名から取る（行の断片より確実）。"""
+    channel = next((name for name in store_hints if name in line), None)
+    if not channel:
+        return None
+    if not any(kw in line for kw in ("抽選", "応募", "予約", "先着")):
+        return None
+    dates = [d for d in _upcoming_dates(line, today) if 0 <= (d - today).days <= 60]
+    if not dates:
+        return None
+    return {
+        "channel": channel,
+        "product": _item_short_name(item),
+        "apply_start": min(dates).isoformat() if len(dates) > 1 else None,
+        "apply_end": max(dates).isoformat(),
+    }
+

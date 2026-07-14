@@ -24,6 +24,9 @@ concurrency:
   group: gunpla-restock
   cancel-in-progress: false
 
+permissions:
+  contents: write  # 検知した抽選候補（data/detected_lotteries.json）のコミット用
+
 jobs:
   check-stock:
     runs-on: ubuntu-latest
@@ -70,6 +73,18 @@ jobs:
           # ログをリアルタイムに出す（バッファリングで実行途中の進捗が見えない問題の解消）
           PYTHONUNBUFFERED: '1'
         run: python check_stock.py
+
+      - name: Commit detected lotteries（応募台帳への連携データ）
+        if: always()
+        run: |
+          if [ -f data/detected_lotteries.json ] && ! git diff --quiet -- data/detected_lotteries.json 2>/dev/null || [ -n "$(git status --porcelain data/ 2>/dev/null)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add data/detected_lotteries.json
+            git commit -m "抽選候補データ更新 [skip ci]" || exit 0
+            git pull --rebase origin main || true
+            git push || echo "push失敗（次回実行で再試行される）"
+          fi
 
       - name: Save stock state
         uses: actions/cache/save@v4
