@@ -79,109 +79,13 @@ WATCH_ITEMS = [
         "release_date": "2026-02-28",  # 発売日（1年半で自動失効・全商品共通規則）
         "key": "onepiece_op15_stock",
     },
-    # --- 楽天ブックス在庫（公式API・要RAKUTEN_APP_ID）---
-    # 楽天ブックスは定価販売の主要正規ルート。公式APIなのでブロックの心配がなく、
-    # 「定価×1.05以下の在庫あり」だけを検知する＝通知が来た時点で定価で買える可能性が高い。
-    # RAKUTEN_APP_ID（GitHub Secrets / .env）を設定すると自動で有効になる。未設定ならスキップ。
-    {
-        "name": "ポケカ MEGAドリームex BOX（楽天ブックス）",
-        "method": "rakuten_books",
-        "keyword": "ポケモンカード ハイクラスパック MEGAドリームex BOX",
-        "url": "https://books.rakuten.co.jp/",
-        "retail_price": 5500,
-        "release_date": "2025-11-28",  # 発売日（1年半で自動失効）
-        "key": "rakuten_megadream",
-    },
-    {
-        "name": "ポケカ テラスタルフェスex BOX（楽天ブックス）",
-        "method": "rakuten_books",
-        "keyword": "ポケモンカード ハイクラスパック テラスタルフェスex BOX",
-        "url": "https://books.rakuten.co.jp/",
-        "retail_price": 5500,
-        "release_date": "2024-12-06",  # 発売日（1年半で自動失効）
-        "key": "rakuten_terastal",
-    },
-    {
-        "name": "ポケカ ホワイトフレア BOX（楽天ブックス）",
-        "method": "rakuten_books",
-        "keyword": "ポケモンカード 拡張パック ホワイトフレア BOX",
-        "url": "https://books.rakuten.co.jp/",
-        "retail_price": 5800,
-        "release_date": "2025-06-06",  # 発売日（1年半で自動失効）
-        "key": "rakuten_whiteflare",
-    },
-    {
-        "name": "ポケカ ブラックボルト BOX（楽天ブックス）",
-        "method": "rakuten_books",
-        "keyword": "ポケモンカード 拡張パック ブラックボルト BOX",
-        "url": "https://books.rakuten.co.jp/",
-        "retail_price": 5800,
-        "release_date": "2025-06-06",  # 発売日（1年半で自動失効）
-        "key": "rakuten_blackbolt",
-    },
-    {
-        "name": "ワンピ OP-17 世界最強の戦士 BOX（楽天ブックス）",
-        "method": "rakuten_books",
-        "keyword": "ワンピースカードゲーム 世界最強の戦士 BOX",
-        "url": "https://books.rakuten.co.jp/",
-        "retail_price": 5280,
-        "release_date": "2026-08-22",  # 発売日（1年半で自動失効・全商品共通規則）
-        "key": "rakuten_op17",
-    },
-    {
-        "name": "ポケカ ストームエメラルダ BOX（楽天ブックス）",
-        "method": "rakuten_books",
-        "keyword": "ポケモンカード 拡張パック ストームエメラルダ BOX",
-        "url": "https://books.rakuten.co.jp/",
-        "retail_price": 6000,
-        "release_date": "2026-07-31",  # 発売日（1年半で自動失効）
-        "key": "rakuten_stormemerald",
-    },
-    {
-        "name": "ポケカ アビスアイ BOX（楽天ブックス）",
-        "method": "rakuten_books",
-        "keyword": "ポケモンカード 拡張パック アビスアイ BOX",
-        "url": "https://books.rakuten.co.jp/",
-        "retail_price": 6000,
-        "release_date": "2026-05-22",  # 発売日（1年半で自動失効）
-        "key": "rakuten_abysseye",
-    },
-    {
-        "name": "ポケカ ロケット団の栄光 BOX（楽天ブックス）",
-        "method": "rakuten_books",
-        "keyword": "ポケモンカード 拡張パック ロケット団の栄光 BOX",
-        "url": "https://books.rakuten.co.jp/",
-        "retail_price": 5400,
-        "release_date": "2025-04-18",  # 発売日（1年半で自動失効）
-        "key": "rakuten_rocket",
-    },
-    {
-        "name": "ポケカ 超電ブレイカー BOX（楽天ブックス）",
-        "method": "rakuten_books",
-        "keyword": "ポケモンカード 拡張パック 超電ブレイカー BOX",
-        "url": "https://books.rakuten.co.jp/",
-        "retail_price": 5400,
-        "release_date": "2024-10-11",  # 発売日（1年半で自動失効）
-        "key": "rakuten_tyoden",
-    },
-    {
-        "name": "ポケカ インフェルノX BOX（楽天ブックス）",
-        "method": "rakuten_books",
-        "keyword": "ポケモンカード 拡張パック インフェルノX BOX",
-        "url": "https://books.rakuten.co.jp/",
-        "retail_price": 5400,
-        "release_date": "2025-09-26",  # 発売日（1年半で自動失効）
-        "key": "rakuten_inferno",
-    },
-    {
-        "name": "ポケカ 熱風のアリーナ BOX（楽天ブックス）",
-        "method": "rakuten_books",
-        "keyword": "ポケモンカード 強化拡張パック 熱風のアリーナ BOX",
-        "url": "https://books.rakuten.co.jp/",
-        "retail_price": 5400,
-        "release_date": "2025-03-14",  # 発売日（1年半で自動失効）
-        "key": "rakuten_neppu",
-    },
+    # --- 楽天ブックス直接監視は2026-07-14に見送り決定（案C）---
+    # 経緯: 2026年2月の楽天API大改変で新規アプリは接続元固定IPの登録・強制が必須になり、
+    # GitHub Actions（動的IP）からは正当に利用できなくなった（Yahoo!ショッピングAPIも同様）。
+    # 楽天ブックスの受付/再販はanime-matsuri差分検知が間接カバーする。
+    # 復活条件: 固定IPのVPSへ実行環境を移設（案A・月349円〜）＋新API
+    # （openapi.rakuten.co.jp/ichibams + accessKey認証）へのコード改修。
+    # _check_rakuten_books 関数は将来の復活に備えて残置（旧API向けのため要改修）。
     {
         # ワンピ公式ニュース（新商品/コラボ/イベント/抽選）。JSON APIの新着記事差分で検知。
         # ユーザー要望(2026-07-10): ポケカ・ワンピはコラボや新発売のニュースだけでも取得したい。

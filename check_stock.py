@@ -216,7 +216,10 @@ def _check_cart_button(item):
 
 
 def _check_rakuten_books(item):
-    """楽天市場API(IchibaItem/Search)で楽天ブックス(shopCode=book)の在庫を判定する。
+    """【2026-07-14時点で未使用・将来のVPS移設(案A)時に復活】
+    ⚠ このコードは2026-05-13廃止の旧API(app.rakuten.co.jp)向け。復活時は
+    新API(openapi.rakuten.co.jp/ichibams + accessKey認証 + 固定IP登録)への改修が必要。
+    楽天市場API(IchibaItem/Search)で楽天ブックス(shopCode=book)の在庫を判定する。
     楽天ブックスは定価販売の主要正規ルート。availability=1(在庫あり)で検索し、
     定価近傍(定価×1.05以下)のヒットがあれば「定価で買える在庫あり」とする。
     ※転売価格の出品はshopCode=bookに存在しないが、セット品/カートン誤ヒットは価格上限で弾く。
