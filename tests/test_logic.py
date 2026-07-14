@@ -444,5 +444,40 @@ class TestToeiSweepAgeRule(unittest.TestCase):
         self.assertEqual([b["name"] for b in old_only], ["OP-06 双璧の覇者"])
 
 
+class TestWeeklySummary(unittest.TestCase):
+    """週次運用サマリ: 月曜のヘルスレポートで報告しリセット、他の曜日は蓄積のみ。"""
+
+    def _run(self, weekday_date, stats):
+        import datetime as _dt
+        class FakeDT(_dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                d = weekday_date
+                return cls(d.year, d.month, d.day, 10, 0, tzinfo=tz)
+        orig = cs.datetime
+        cs.datetime = FakeDT
+        try:
+            alerts, ns = [], {"weekly_stats": dict(stats)}
+            cs.append_heartbeat({}, ns, alerts, {"ok": ["a"], "fail": [], "suppressed": 0})
+            hb = [a for a in alerts if "ヘルス" in a[0]["name"]][0]
+            return hb[1], ns["weekly_stats"]
+        finally:
+            cs.datetime = orig
+
+    def test_monday_reports_and_resets(self):
+        from datetime import date
+        detail, stats = self._run(date(2026, 7, 20), {"notified": 7, "suppressed": 3, "chances": 2, "since": "2026-07-13"})
+        self.assertIn("週次サマリ", detail)
+        self.assertIn("通知7件", detail)
+        self.assertIn("ノイズ抑制3件", detail)
+        self.assertEqual(stats["notified"], 0)  # リセット
+
+    def test_other_days_no_report(self):
+        from datetime import date
+        detail, stats = self._run(date(2026, 7, 21), {"notified": 7, "suppressed": 3, "chances": 2, "since": "2026-07-20"})
+        self.assertNotIn("週次サマリ", detail)
+        self.assertEqual(stats["notified"], 7)  # 蓄積維持
+
+
 if __name__ == "__main__":
     unittest.main()
